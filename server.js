@@ -367,7 +367,7 @@ app.get("/admin/registry/new", (req, res) => {
 
 app.post("/admin/registry", (req, res) => {
   const { display_name, event_date, registry_type } = req.body;
-  const storeId = req.ecwid?.store_id || null;
+  const storeId = req.ecwid?.store_id || ECWID_STORE_ID || null;
   const type = registry_type === "online" ? "online" : "in_store";
   const stmt = db.prepare(
     "INSERT INTO registry (display_name, event_date, registry_type, store_id) VALUES (?, ?, ?, ?)"
