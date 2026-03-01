@@ -11,10 +11,8 @@
     </div>
   </div>
   <div class="toolbar-actions">
-    <% const detailStoreId = registry.store_id || ((ecwid && ecwid.store_id) ? ecwid.store_id : ''); %>
-    <% const detailQuery = detailStoreId ? ('?store_id=' + encodeURIComponent(detailStoreId)) : ''; %>
-    <button class="btn secondary copy-link-btn" data-url="/registry/<%= registry.id %><%= detailQuery %>">Copy shareable link</button>
-    <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="/registry/<%= registry.id %><%= detailQuery %>">View Public Page</a>
+    <button class="btn secondary copy-link-btn" data-url="<%= publicRegistryUrl %>?reg=<%= registry.id %>">Copy shareable link</button>
+    <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="<%= publicRegistryUrl %>?reg=<%= registry.id %>">View Public Page</a>
     <a class="btn secondary" href="/admin/registry/<%= registry.id %>/print" target="_blank">Print items</a>
     <a class="link" href="/admin">Back</a>
     <% if (registry.status === 'active') { %>
@@ -28,7 +26,7 @@
 <script>
 document.querySelectorAll('.copy-link-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const url = window.location.origin + btn.getAttribute('data-url');
+    const url = btn.getAttribute('data-url');
     navigator.clipboard.writeText(url).then(() => {
       const orig = btn.textContent;
       btn.textContent = 'Copied!';

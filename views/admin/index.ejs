@@ -3,10 +3,8 @@
 <div class="toolbar">
   <h1>Registries</h1>
   <div class="toolbar-actions">
-    <% const listStoreId = (ecwid && ecwid.store_id) ? ecwid.store_id : ''; %>
-    <% const listQuery = listStoreId ? ('?store_id=' + encodeURIComponent(listStoreId)) : ''; %>
-    <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="/registry<%= listQuery %>">View Storefront</a>
-<a class="btn" href="/admin/registry/new">New registry</a>
+    <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="<%= publicRegistryUrl %>">View Storefront</a>
+    <a class="btn" href="/admin/registry/new">New registry</a>
   </div>
 </div>
 
@@ -32,9 +30,7 @@
         </div>
       </div>
       <div class="row-actions">
-        <% const rowStoreId = r.store_id || ((ecwid && ecwid.store_id) ? ecwid.store_id : ''); %>
-        <% const rowQuery = rowStoreId ? ('?store_id=' + encodeURIComponent(rowStoreId)) : ''; %>
-        <button class="btn secondary copy-link-btn" data-url="/registry/<%= r.id %><%= rowQuery %>" title="Copy shareable link">Copy link</button>
+        <button class="btn secondary copy-link-btn" data-url="<%= publicRegistryUrl %>?reg=<%= r.id %>" title="Copy shareable link">Copy link</button>
         <a class="link" href="/admin/registry/<%= r.id %>">Manage</a>
       </div>
     </div>
@@ -44,7 +40,7 @@
 <script>
 document.querySelectorAll('.copy-link-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const url = window.location.origin + btn.getAttribute('data-url');
+    const url = btn.getAttribute('data-url');
     navigator.clipboard.writeText(url).then(() => {
       const orig = btn.textContent;
       btn.textContent = 'Copied!';

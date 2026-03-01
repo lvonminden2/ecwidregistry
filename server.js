@@ -20,6 +20,9 @@ const ECWID_CLIENT_SECRET = process.env.ECWID_CLIENT_SECRET || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev_session_secret";
 const ALLOW_NO_ECWID = (process.env.ALLOW_NO_ECWID || "true").toLowerCase() === "true";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+// URL of the Ecwid storefront page where the widget is embedded.
+// If set, all public-facing registry links point here instead of the standalone /registry page.
+const PUBLIC_REGISTRY_URL = process.env.PUBLIC_REGISTRY_URL || "";
 
 const app = express();
 app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
@@ -166,6 +169,8 @@ app.use((req, res, next) => {
   req.ecwid = req.session?.ecwid || null;
   res.locals.ecwid = req.ecwid;
   res.locals.ecwidClientId = ECWID_CLIENT_ID;
+  // Resolved public registry base URL: Ecwid storefront page if configured, else our own /registry
+  res.locals.publicRegistryUrl = PUBLIC_REGISTRY_URL || (BASE_URL + "/registry");
   next();
 });
 
@@ -900,7 +905,9 @@ app.get("/widget/registry.js", (req, res) => {
     const isEmbed = container.getAttribute('data-embed') === 'true';
     const inIframe = window.self !== window.top;
     const storeId = container.getAttribute('data-store-id') || '';
-    let activeRegistryId = container.getAttribute('data-registry-id') || '';
+    // Support deep-link: ?reg=ID in the page URL auto-opens that registry
+    const _urlReg = new URLSearchParams(window.location.search).get('reg') || '';
+    let activeRegistryId = _urlReg || container.getAttribute('data-registry-id') || '';
 
     let searchTimer = null;
 
