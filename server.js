@@ -55,7 +55,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: "lax",
+      // "none" + secure:true is required for cookies to work inside Ecwid's iframe
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       secure: process.env.NODE_ENV === "production"
     }
   })
@@ -305,20 +306,29 @@ async function fetchEcwidProductBySku(sku, storeId, accessToken) {
 
 // Native app iframe entrypoint
 app.get("/ecwid/iframe", (req, res) => {
+  // Ecwid iframes require no X-Frame-Options restriction
+  res.removeHeader("X-Frame-Options");
+
   const payload = req.query.payload;
   if (payload) {
-    const data = decryptEcwidPayload(payload);
-    if (!data) {
-      console.log("[ecwid-iframe] payload decrypt failed");
-      return res.status(400).send("Invalid payload");
+    if (ECWID_CLIENT_SECRET) {
+      // Decrypt and store Ecwid context in session
+      const data = decryptEcwidPayload(payload);
+      if (!data) {
+        console.log("[ecwid-iframe] payload decrypt failed — check ECWID_CLIENT_SECRET matches your app");
+        return res.status(400).send("Invalid payload — ECWID_CLIENT_SECRET mismatch");
+      }
+      console.log(`[ecwid-iframe] payload ok store_id=${data.store_id || data.storeId || ""}`);
+      req.session.ecwid = {
+        store_id: String(data.store_id || data.storeId || ""),
+        access_token: data.access_token || data.accessToken || "",
+        public_token: data.public_token || data.publicToken || "",
+        lang: data.lang || ""
+      };
+    } else {
+      // No client secret configured — accept the payload without decryption
+      console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET set — skipping payload verification");
     }
-    console.log(`[ecwid-iframe] payload ok store_id=${data.store_id || data.storeId || ""}`);
-    req.session.ecwid = {
-      store_id: String(data.store_id || data.storeId || ""),
-      access_token: data.access_token || data.accessToken || "",
-      public_token: data.public_token || data.publicToken || "",
-      lang: data.lang || ""
-    };
     return res.redirect("/admin");
   }
 
