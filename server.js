@@ -843,6 +843,7 @@ app.get("/widget/registry.js", (req, res) => {
     function renderList(data, searchValue){
       const effectiveStoreId = storeId || defaultStoreId || '';
       const detailSuffix = effectiveStoreId ? ('?store_id=' + encodeURIComponent(String(effectiveStoreId))) : '';
+      const detailBase = baseUrl + '/registry/';
 
       const searchBox =
         '<div class="reg-search-wrap">' +
@@ -871,7 +872,7 @@ app.get("/widget/registry.js", (req, res) => {
           );
         }
         return (
-          '<a class="reg-card" href="/registry/' + r.id + detailSuffix + '">' +
+          '<a class="reg-card" href="' + detailBase + r.id + detailSuffix + '">' +
             '<div class="reg-name">' + esc(r.display_name) + ' ' + typeBadge + '</div>' +
             '<div class="reg-meta">' + esc(fmtDate(r.event_date)) + ' · ' + r.item_count + ' items</div>' +
           '</a>'
