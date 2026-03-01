@@ -256,7 +256,10 @@ textarea { resize: vertical; }
 }
 
 /* ── Public widget ───────────────────────── */
-.registry-root { background: transparent; }
+.registry-root {
+  background: transparent;
+  padding: 28px 24px;
+}
 
 .reg-header {
   font-family: "Prata", serif;

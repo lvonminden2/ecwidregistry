@@ -837,6 +837,7 @@ app.get("/widget/registry.js", (req, res) => {
   function mount(container){
     if (container.getAttribute('data-registry-mounted') === '1') return;
     container.setAttribute('data-registry-mounted', '1');
+    container.classList.add('registry-root');
 
     const isEmbed = container.getAttribute('data-embed') === 'true';
     const inIframe = window.self !== window.top;
