@@ -21,6 +21,7 @@ const ALLOW_NO_ECWID = (process.env.ALLOW_NO_ECWID || "true").toLowerCase() === 
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const app = express();
+app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 app.use(express.urlencoded({ extended: true }));
@@ -306,37 +307,31 @@ async function fetchEcwidProductBySku(sku, storeId, accessToken) {
 
 // Native app iframe entrypoint
 app.get("/ecwid/iframe", (req, res) => {
-  // Ecwid iframes require no X-Frame-Options restriction
+  // Allow Ecwid to embed this page in an iframe
   res.removeHeader("X-Frame-Options");
+  res.setHeader("Content-Security-Policy", "frame-ancestors *");
 
   const payload = req.query.payload;
-  if (payload) {
-    if (ECWID_CLIENT_SECRET) {
-      // Decrypt and store Ecwid context in session
-      const data = decryptEcwidPayload(payload);
-      if (!data) {
-        console.log("[ecwid-iframe] payload decrypt failed — check ECWID_CLIENT_SECRET matches your app");
-        return res.status(400).send("Invalid payload — ECWID_CLIENT_SECRET mismatch");
-      }
-      console.log(`[ecwid-iframe] payload ok store_id=${data.store_id || data.storeId || ""}`);
-      req.session.ecwid = {
-        store_id: String(data.store_id || data.storeId || ""),
-        access_token: data.access_token || data.accessToken || "",
-        public_token: data.public_token || data.publicToken || "",
-        lang: data.lang || ""
-      };
-    } else {
-      // No client secret configured — accept the payload without decryption
-      console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET set — skipping payload verification");
+  if (payload && ECWID_CLIENT_SECRET) {
+    const data = decryptEcwidPayload(payload);
+    if (!data) {
+      console.log("[ecwid-iframe] payload decrypt failed — check ECWID_CLIENT_SECRET");
+      return res.status(400).send("Invalid payload — ECWID_CLIENT_SECRET mismatch");
     }
-    return res.redirect("/admin");
+    console.log(`[ecwid-iframe] payload ok store_id=${data.store_id || data.storeId || ""}`);
+    req.session.ecwid = {
+      store_id: String(data.store_id || data.storeId || ""),
+      access_token: data.access_token || data.accessToken || "",
+      public_token: data.public_token || data.publicToken || "",
+      lang: data.lang || ""
+    };
+  } else if (payload) {
+    console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET — skipping payload verification");
   }
 
-  if (ALLOW_NO_ECWID) {
-    return res.redirect("/admin");
-  }
-
-  res.status(400).send("Missing payload");
+  // Render admin directly (avoid redirect — some iframe hosts treat 302 as an error)
+  const registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
+  return res.render("admin/index", { registries });
 });
 
 // Admin routes
