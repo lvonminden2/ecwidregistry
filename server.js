@@ -731,6 +731,25 @@ app.get("/widget/registry.js", (req, res) => {
 (function(){
   const baseUrl = "${BASE_URL}";
   const defaultStoreId = "${ECWID_STORE_ID}";
+
+  // Inject store fonts if not already present
+  if (!document.querySelector('link[data-registry-fonts]')) {
+    const link = document.createElement('link');
+    link.setAttribute('data-registry-fonts', '1');
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap';
+    document.head.appendChild(link);
+  }
+
+  // Inject widget styles if not already present
+  if (!document.querySelector('link[data-registry-styles]')) {
+    const link = document.createElement('link');
+    link.setAttribute('data-registry-styles', '1');
+    link.rel = 'stylesheet';
+    link.href = baseUrl + '/public/styles.css';
+    document.head.appendChild(link);
+  }
+
   function findContainer(){
     return document.getElementById('registry-app') || document.querySelector('[data-registry-app="1"]');
   }
