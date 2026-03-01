@@ -14,6 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 3000;
 const ECWID_STORE_ID = process.env.ECWID_STORE_ID || "STORE_ID_PLACEHOLDER";
+const ECWID_CLIENT_ID = process.env.ECWID_CLIENT_ID || "";
 const ECWID_ACCESS_TOKEN = process.env.ECWID_ACCESS_TOKEN || "";
 const ECWID_CLIENT_SECRET = process.env.ECWID_CLIENT_SECRET || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev_session_secret";
@@ -161,6 +162,7 @@ function decryptEcwidPayload(payload) {
 app.use((req, res, next) => {
   req.ecwid = req.session?.ecwid || null;
   res.locals.ecwid = req.ecwid;
+  res.locals.ecwidClientId = ECWID_CLIENT_ID;
   next();
 });
 

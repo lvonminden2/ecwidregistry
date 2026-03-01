@@ -8,8 +8,18 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/public/styles.css" />
-    <!-- Required by Ecwid native app iframe to allow resizing and cross-origin communication -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/iframe-resizer/4.3.9/iframeResizer.contentWindow.min.js"></script>
+    <!-- Ecwid native app SDK — required for iframe resizing and app initialization -->
+    <script src="https://djqizrxa6f10j.cloudfront.net/ecwid-sdk/js/1.3.0/ecwid-app.js"></script>
+    <script>
+      // EcwidApp.init() must be called on every page inside the Ecwid iframe
+      if (typeof EcwidApp !== 'undefined') {
+        EcwidApp.init({
+          app_id: "<%= typeof ecwidClientId !== 'undefined' ? ecwidClientId : '' %>",
+          autoloadedflag: true,
+          autoheight: true
+        });
+      }
+    </script>
   </head>
   <body>
     <div class="page">
