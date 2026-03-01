@@ -1,0 +1,58 @@
+<%- include('../partials/header', { title: 'Registry Admin' }) %>
+
+<div class="toolbar">
+  <h1>Registries</h1>
+  <div class="toolbar-actions">
+    <% const listStoreId = (ecwid && ecwid.store_id) ? ecwid.store_id : ''; %>
+    <% const listQuery = listStoreId ? ('?store_id=' + encodeURIComponent(listStoreId)) : ''; %>
+    <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="/registry<%= listQuery %>">View Storefront</a>
+    <a class="btn secondary" href="/admin/setup">Integration Setup</a>
+    <a class="btn" href="/admin/registry/new">New registry</a>
+  </div>
+</div>
+
+<% if (ecwid && ecwid.store_id) { %>
+  <div class="card">
+    <div class="muted">Connected store: <span class="strong"><%= ecwid.store_id %></span></div>
+  </div>
+<% } %>
+
+<div class="card">
+  <% if (registries.length === 0) { %>
+    <div class="muted">No registries yet. <a class="link" href="/admin/registry/new">Create one.</a></div>
+  <% } %>
+  <% registries.forEach(r => { %>
+    <div class="row">
+      <div>
+        <div class="strong">
+          <%= r.display_name %>
+          <span class="badge <%= r.registry_type === 'online' ? 'badge-online' : 'badge-instore' %>">
+            <%= r.registry_type === 'online' ? 'Online' : 'In-store' %>
+          </span>
+        </div>
+        <div class="muted"><%= r.event_date || 'No date' %> · <%= r.status %></div>
+      </div>
+      <div class="row-actions">
+        <% const rowStoreId = r.store_id || ((ecwid && ecwid.store_id) ? ecwid.store_id : ''); %>
+        <% const rowQuery = rowStoreId ? ('?store_id=' + encodeURIComponent(rowStoreId)) : ''; %>
+        <button class="btn secondary copy-link-btn" data-url="/registry/<%= r.id %><%= rowQuery %>" title="Copy shareable link">Copy link</button>
+        <a class="link" href="/admin/registry/<%= r.id %>">Manage</a>
+      </div>
+    </div>
+  <% }) %>
+</div>
+
+<script>
+document.querySelectorAll('.copy-link-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const url = window.location.origin + btn.getAttribute('data-url');
+    navigator.clipboard.writeText(url).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    });
+  });
+});
+</script>
+
+<%- include('../partials/footer') %>

@@ -1,0 +1,13 @@
+<%- include('../partials/header', { title: 'Registry Embed Preview' }) %>
+
+<div class="card">
+  <h1>Registry Embed Preview</h1>
+  <div class="muted">Use this block in Ecwid site builder via HTML section.</div>
+</div>
+
+<div class="card">
+  <div id="registry-app" data-registry-app="1" data-embed="true" data-store-id="<%= storeId %>"></div>
+</div>
+<script src="/widget/registry.js"></script>
+
+<%- include('../partials/footer') %>

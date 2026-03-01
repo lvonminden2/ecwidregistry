@@ -1,0 +1,33 @@
+<%- include('../partials/header', { title: 'New Registry' }) %>
+
+<div class="toolbar">
+  <h1>New Registry</h1>
+  <a class="link" href="/admin">Back</a>
+</div>
+
+<form class="card" method="post" action="/admin/registry">
+  <label class="field">
+    <div class="label">Display name <span class="muted">(e.g. "Smith & Johnson Wedding")</span></div>
+    <input name="display_name" type="text" required placeholder="Couple / family name" />
+  </label>
+  <label class="field">
+    <div class="label">Event date</div>
+    <input name="event_date" type="date" />
+  </label>
+  <div class="field">
+    <div class="label">Registry type</div>
+    <div class="radio-group">
+      <label class="radio-label">
+        <input type="radio" name="registry_type" value="in_store" checked />
+        In-store <span class="muted">— guests purchase in-store, no online cart</span>
+      </label>
+      <label class="radio-label">
+        <input type="radio" name="registry_type" value="online" />
+        Online <span class="muted">— guests can add items to cart &amp; ship or pick up</span>
+      </label>
+    </div>
+  </div>
+  <button class="btn" type="submit">Create registry</button>
+</form>
+
+<%- include('../partials/footer') %>
