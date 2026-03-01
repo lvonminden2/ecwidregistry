@@ -25,8 +25,8 @@ const app = express();
 app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.urlencoded({ extended: true, limit: "12mb" }));
+app.use(express.json({ limit: "12mb" }));
 app.use((req, res, next) => {
   if (req.path.startsWith("/api/") || req.path === "/widget/registry.js") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -117,6 +117,9 @@ const init = db.transaction(() => {
   }
   if (!cols.includes("registry_type")) {
     db.exec("ALTER TABLE registry ADD COLUMN registry_type TEXT NOT NULL DEFAULT 'in_store'");
+  }
+  if (!cols.includes("photo")) {
+    db.exec("ALTER TABLE registry ADD COLUMN photo TEXT");
   }
   const itemCols = db.prepare("PRAGMA table_info(registry_item)").all().map((c) => c.name);
   if (!itemCols.includes("product_sku")) {
@@ -613,6 +616,29 @@ app.post("/admin/registry/:id/archive", (req, res) => {
   const registryId = Number(req.params.id);
   db.prepare("UPDATE registry SET status = 'archived', updated_at = datetime('now') WHERE id = ?").run(registryId);
   res.redirect("/admin");
+});
+
+app.post("/admin/registry/:id/photo", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+  const photo = String(req.body.photo_data || "").trim() || null;
+  // Validate it looks like a data URL (data:image/...) or is empty (to remove)
+  if (photo && !photo.startsWith("data:image/")) {
+    const msg = encodeURIComponent("Invalid image format.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+  db.prepare("UPDATE registry SET photo = ?, updated_at = datetime('now') WHERE id = ?").run(photo, registryId);
+  const msg = photo ? encodeURIComponent("Photo updated.") : encodeURIComponent("Photo removed.");
+  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
+app.get("/admin/registry/:id/print", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+  const items = getRegistryItems(registryId);
+  res.render("admin/print", { registry, items });
 });
 
 // Public pages

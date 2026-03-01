@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registry — <%= registry.display_name %></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=Prata&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --accent: #820000;
+      --muted: #6b6058;
+      --border: #d8cfc8;
+      --ink: #212427;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "DM Sans", sans-serif;
+      font-size: 13px;
+      color: var(--ink);
+      background: #fff;
+      padding: 32px 40px;
+    }
+
+    .print-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 24px;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid var(--accent);
+    }
+
+    .print-photo {
+      width: 90px;
+      height: 90px;
+      object-fit: cover;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .print-title {
+      font-family: "Prata", serif;
+      font-size: 26px;
+      font-weight: 400;
+      letter-spacing: 0.01em;
+      color: var(--ink);
+      margin-bottom: 4px;
+    }
+
+    .print-meta {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .print-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .print-btn {
+      background: var(--accent);
+      color: #fff;
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      padding: 8px 20px;
+      font-family: "DM Sans", sans-serif;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .print-btn.secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 2px solid var(--border);
+      white-space: nowrap;
+    }
+
+    tbody td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    tbody tr:last-child td { border-bottom: none; }
+
+    .item-name { font-weight: 500; font-size: 13px; }
+    .item-sku  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .num { text-align: center; }
+
+    .still-needed {
+      font-weight: 500;
+      color: var(--accent);
+    }
+
+    .still-needed.zero {
+      color: #2a6e3f;
+    }
+
+    .print-footer {
+      margin-top: 28px;
+      font-size: 11px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* ── Print styles ── */
+    @media print {
+      .print-actions { display: none !important; }
+      body { padding: 0; }
+      @page { margin: 18mm 16mm; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="print-header">
+  <% if (registry.photo) { %>
+    <img class="print-photo" src="<%= registry.photo %>" alt="" />
+  <% } %>
+  <div>
+    <div class="print-title"><%= registry.display_name %></div>
+    <div class="print-meta">
+      <% if (registry.event_date) { %>
+        <%= new Date(registry.event_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) %> &nbsp;·&nbsp;
+      <% } %>
+      Registry items list
+    </div>
+  </div>
+  <div class="print-actions">
+    <button class="print-btn" onclick="window.print()">Print / Save PDF</button>
+    <button class="print-btn secondary" onclick="window.close()">Close</button>
+  </div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:40%">Item</th>
+      <th class="num">Desired</th>
+      <th class="num">Purchased</th>
+      <th class="num">Still needed</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% if (items.length === 0) { %>
+      <tr>
+        <td colspan="4" style="color:var(--muted);padding:20px 10px">No items on this registry yet.</td>
+      </tr>
+    <% } %>
+    <% items.forEach(item => { %>
+      <tr>
+        <td>
+          <div class="item-name"><%= item.product_name || 'Registry item' %></div>
+          <% if (item.product_sku) { %>
+            <div class="item-sku">SKU: <%= item.product_sku %></div>
+          <% } %>
+        </td>
+        <td class="num"><%= item.desired_qty %></td>
+        <td class="num"><%= item.purchased_qty %></td>
+        <td class="num still-needed <%= item.still_needed === 0 ? 'zero' : '' %>"><%= item.still_needed %></td>
+      </tr>
+    <% }) %>
+  </tbody>
+</table>
+
+<div class="print-footer">
+  <span>Printed <%= new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) %></span>
+  <span><%= items.length %> item<%= items.length !== 1 ? 's' : '' %> &nbsp;·&nbsp; <%= items.reduce((s,i) => s + i.still_needed, 0) %> still needed</span>
+</div>
+
+</body>
+</html>

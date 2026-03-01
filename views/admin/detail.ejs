@@ -1,17 +1,21 @@
 <%- include('../partials/header', { title: registry.display_name }) %>
 
 <div class="toolbar">
-  <div>
-    <h1>
-      <%= registry.display_name %>
-    </h1>
-    <div class="muted"><%= registry.event_date || 'No date set' %> · <%= registry.status %></div>
+  <div class="toolbar-left">
+    <% if (registry.photo) { %>
+      <img class="registry-photo-thumb" src="<%= registry.photo %>" alt="Registry photo" />
+    <% } %>
+    <div>
+      <h1><%= registry.display_name %></h1>
+      <div class="muted"><%= registry.event_date || 'No date set' %> · <%= registry.status %></div>
+    </div>
   </div>
   <div class="toolbar-actions">
     <% const detailStoreId = registry.store_id || ((ecwid && ecwid.store_id) ? ecwid.store_id : ''); %>
     <% const detailQuery = detailStoreId ? ('?store_id=' + encodeURIComponent(detailStoreId)) : ''; %>
     <button class="btn secondary copy-link-btn" data-url="/registry/<%= registry.id %><%= detailQuery %>">Copy shareable link</button>
     <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="/registry/<%= registry.id %><%= detailQuery %>">View Public Page</a>
+    <a class="btn secondary" href="/admin/registry/<%= registry.id %>/print" target="_blank">Print items</a>
     <a class="link" href="/admin">Back</a>
     <% if (registry.status === 'active') { %>
       <form method="post" action="/admin/registry/<%= registry.id %>/archive">
@@ -91,6 +95,66 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
       </label>
       <button class="btn" type="submit">Add item</button>
     </form>
+  </div>
+
+  <div class="card">
+    <h2>Registry photo</h2>
+    <% if (registry.photo) { %>
+      <img class="registry-photo-preview" src="<%= registry.photo %>" alt="Registry photo" />
+    <% } %>
+    <form method="post" action="/admin/registry/<%= registry.id %>/photo" id="photo-form">
+      <input type="hidden" name="photo_data" id="photo-data-input" value="" />
+      <label class="field photo-file-label">
+        <div class="label">Upload photo</div>
+        <input type="file" id="photo-file-input" accept="image/*" />
+      </label>
+      <div class="photo-preview-wrap" id="photo-preview-wrap" style="display:none">
+        <img id="photo-preview-img" src="" alt="Preview" class="registry-photo-preview" />
+      </div>
+      <div class="row-actions" style="margin-top:10px">
+        <button class="btn" type="submit" id="photo-save-btn" disabled>Save photo</button>
+        <% if (registry.photo) { %>
+          <button class="btn secondary" type="button" id="photo-remove-btn">Remove photo</button>
+        <% } %>
+      </div>
+    </form>
+    <script>
+    (function(){
+      const fileInput = document.getElementById('photo-file-input');
+      const dataInput = document.getElementById('photo-data-input');
+      const previewWrap = document.getElementById('photo-preview-wrap');
+      const previewImg = document.getElementById('photo-preview-img');
+      const saveBtn = document.getElementById('photo-save-btn');
+      const removeBtn = document.getElementById('photo-remove-btn');
+
+      fileInput.addEventListener('change', function(){
+        const file = this.files[0];
+        if (!file) return;
+        if (file.size > 10 * 1024 * 1024) {
+          alert('Image must be under 10 MB.');
+          this.value = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = function(e){
+          dataInput.value = e.target.result;
+          previewImg.src = e.target.result;
+          previewWrap.style.display = 'block';
+          saveBtn.disabled = false;
+        };
+        reader.readAsDataURL(file);
+      });
+
+      if (removeBtn) {
+        removeBtn.addEventListener('click', function(){
+          if (!confirm('Remove the photo from this registry?')) return;
+          dataInput.value = '';
+          saveBtn.disabled = false;
+          document.getElementById('photo-form').submit();
+        });
+      }
+    })();
+    </script>
   </div>
 
   <div class="card">

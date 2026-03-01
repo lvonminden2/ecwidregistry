@@ -22,9 +22,14 @@
   <% } %>
   <% registries.forEach(r => { %>
     <div class="row">
-      <div>
-        <div class="strong"><%= r.display_name %></div>
-        <div class="muted"><%= r.event_date || 'No date' %> · <%= r.status %></div>
+      <div class="row-left">
+        <% if (r.photo) { %>
+          <img class="registry-photo-list" src="<%= r.photo %>" alt="" />
+        <% } %>
+        <div>
+          <div class="strong"><%= r.display_name %></div>
+          <div class="muted"><%= r.event_date || 'No date' %> · <%= r.status %></div>
+        </div>
       </div>
       <div class="row-actions">
         <% const rowStoreId = r.store_id || ((ecwid && ecwid.store_id) ? ecwid.store_id : ''); %>
