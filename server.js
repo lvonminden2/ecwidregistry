@@ -354,12 +354,6 @@ app.get("/admin", (req, res) => {
   res.render("admin/index", { registries });
 });
 
-app.get("/admin/setup", (req, res) => {
-  res.render("admin/setup", {
-    baseUrl: BASE_URL,
-    storeId: ECWID_STORE_ID
-  });
-});
 
 app.get("/admin/registry/new", (req, res) => {
   res.render("admin/new");

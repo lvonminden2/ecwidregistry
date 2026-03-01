@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add .env.example .gitignore package.json package-lock.json server.js public/ views/)",
+      "Bash(git commit:*)",
+      "Bash(gh auth status)",
+      "Bash(ssh -T git@github.com)",
+      "Bash(git remote set-url origin https://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@github.com/lvonminden2/ecwidregistry.git)",
+      "Bash(git push -u origin main)",
+      "Bash(git remote set-url origin https://github.com/lvonminden2/ecwidregistry.git)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://ecwidregistry-production.up.railway.app/health)",
+      "WebFetch(domain:lepetitegourmetshoppe.com)",
+      "Bash(git add public/styles.css views/partials/header.ejs server.js)",
+      "Bash(git push)",
+      "Bash(ssh-keygen -t ed25519 -C \"lvonminden2@github\" -f ~/.ssh/id_ed25519_github -N \"\")",
+      "Bash(chmod 600 ~/.ssh/id_ed25519_github ~/.ssh/config)",
+      "Bash(chmod 700 ~/.ssh)",
+      "Bash(ssh-keyscan github.com)",
+      "Bash(~/.ssh/known_hosts)",
+      "Bash(git remote set-url origin git@github.com:lvonminden2/ecwidregistry.git)",
+      "Bash(git push origin main)",
+      "Bash(git add server.js)",
+      "Bash(railway logs --tail 50)",
+      "Bash(git add views/partials/header.ejs)",
+      "WebFetch(domain:developers.ecwid.com)",
+      "WebFetch(domain:api-docs.ecwid.com)",
+      "WebFetch(domain:djqizrxa6f10j.cloudfront.net)",
+      "WebFetch(domain:support.ecwid.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(git add server.js views/partials/header.ejs .env.example)",
+      "Bash(git add public/styles.css server.js)",
+      "Bash(git add -A)"
+    ]
+  }
+}

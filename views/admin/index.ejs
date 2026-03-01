@@ -6,8 +6,7 @@
     <% const listStoreId = (ecwid && ecwid.store_id) ? ecwid.store_id : ''; %>
     <% const listQuery = listStoreId ? ('?store_id=' + encodeURIComponent(listStoreId)) : ''; %>
     <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="/registry<%= listQuery %>">View Storefront</a>
-    <a class="btn secondary" href="/admin/setup">Integration Setup</a>
-    <a class="btn" href="/admin/registry/new">New registry</a>
+<a class="btn" href="/admin/registry/new">New registry</a>
   </div>
 </div>
 
