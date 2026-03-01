@@ -23,12 +23,7 @@
   <% registries.forEach(r => { %>
     <div class="row">
       <div>
-        <div class="strong">
-          <%= r.display_name %>
-          <span class="badge <%= r.registry_type === 'online' ? 'badge-online' : 'badge-instore' %>">
-            <%= r.registry_type === 'online' ? 'Online' : 'In-store' %>
-          </span>
-        </div>
+        <div class="strong"><%= r.display_name %></div>
         <div class="muted"><%= r.event_date || 'No date' %> · <%= r.status %></div>
       </div>
       <div class="row-actions">

@@ -4,9 +4,6 @@
   <div>
     <h1>
       <%= registry.display_name %>
-      <span class="badge <%= registry.registry_type === 'online' ? 'badge-online' : 'badge-instore' %>">
-        <%= registry.registry_type === 'online' ? 'Online' : 'In-store' %>
-      </span>
     </h1>
     <div class="muted"><%= registry.event_date || 'No date set' %> · <%= registry.status %></div>
   </div>

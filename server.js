@@ -360,9 +360,9 @@ app.get("/admin/registry/new", (req, res) => {
 });
 
 app.post("/admin/registry", (req, res) => {
-  const { display_name, event_date, registry_type } = req.body;
+  const { display_name, event_date } = req.body;
   const storeId = req.ecwid?.store_id || ECWID_STORE_ID || null;
-  const type = registry_type === "online" ? "online" : "in_store";
+  const type = "online";
   const stmt = db.prepare(
     "INSERT INTO registry (display_name, event_date, registry_type, store_id) VALUES (?, ?, ?, ?)"
   );
@@ -897,13 +897,10 @@ app.get("/widget/registry.js", (req, res) => {
         return;
       }
       const cards = data.map(r => {
-        const typeBadge = r.registry_type === 'online'
-          ? '<span class="reg-type-badge reg-type-online">Online</span>'
-          : '<span class="reg-type-badge reg-type-instore">In-store</span>';
         if (isEmbed) {
           return (
             '<div class="reg-card">' +
-              '<div class="reg-name">' + esc(r.display_name) + ' ' + typeBadge + '</div>' +
+              '<div class="reg-name">' + esc(r.display_name) + '</div>' +
               '<div class="reg-meta">' + esc(fmtDate(r.event_date)) + ' · ' + r.item_count + ' items</div>' +
               '<div class="reg-actions"><button class="reg-btn reg-open-btn" data-open-id="' + r.id + '">View Registry</button></div>' +
             '</div>'
@@ -911,7 +908,7 @@ app.get("/widget/registry.js", (req, res) => {
         }
         return (
           '<a class="reg-card" href="' + detailBase + r.id + detailSuffix + '">' +
-            '<div class="reg-name">' + esc(r.display_name) + ' ' + typeBadge + '</div>' +
+            '<div class="reg-name">' + esc(r.display_name) + '</div>' +
             '<div class="reg-meta">' + esc(fmtDate(r.event_date)) + ' · ' + r.item_count + ' items</div>' +
           '</a>'
         );
@@ -960,12 +957,9 @@ app.get("/widget/registry.js", (req, res) => {
         setRegistryExtraFields(registry);
       }).catch(function(){});
 
-      const isOnline = registry.registry_type === 'online';
       const rows = items.map(item => {
         const stillNeeded = Number(item.still_needed ?? Math.max(0, (item.desired_qty || 0) - (item.purchased_qty || 0)));
-        const action = isOnline
-          ? '<button class="reg-btn" data-product-id="' + item.product_id + '">Add to cart</button>'
-          : '<span class="reg-instore-note">Available in store</span>';
+        const action = '<button class="reg-btn" data-product-id="' + item.product_id + '">Add to cart</button>';
         return (
           '<div class="reg-item">' +
             '<div>' +
