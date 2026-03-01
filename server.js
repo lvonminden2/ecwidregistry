@@ -807,26 +807,64 @@ app.get("/widget/registry.js", (req, res) => {
     });
   }
 
-  function setRegistryExtraFields(registry){
-    if (!window.ec || !ec.order || !ec.order.extraFields) return;
+  function applyRegistryExtraFields(id, name){
+    if (!window.ec || !ec.order || !ec.order.extraFields) return false;
     ec.order.extraFields.registry_id = {
       title: 'Registry ID',
       type: 'text',
       required: false,
       orderDetailsDisplaySection: 'hidden',
-      value: String(registry.id)
+      value: String(id)
     };
     ec.order.extraFields.registry_name = {
       title: 'Registry Name',
       type: 'text',
       required: false,
       orderDetailsDisplaySection: 'hidden',
-      value: registry.display_name
+      value: String(name || '')
     };
-    if (window.Ecwid && Ecwid.refreshConfig) {
-      Ecwid.refreshConfig();
-    }
+    if (window.Ecwid && Ecwid.refreshConfig) Ecwid.refreshConfig();
+    return true;
   }
+
+  function setRegistryExtraFields(registry){
+    // Persist to localStorage so it survives page navigation to checkout
+    try {
+      localStorage.setItem('_reg_ctx', JSON.stringify({
+        id: registry.id,
+        name: registry.display_name,
+        ts: Date.now()
+      }));
+    } catch(e){}
+    applyRegistryExtraFields(registry.id, registry.display_name);
+  }
+
+  // Restore registry context on every Ecwid page/navigation (including checkout)
+  function restoreRegistryContext(){
+    try {
+      var raw = localStorage.getItem('_reg_ctx');
+      if (!raw) return;
+      var ctx = JSON.parse(raw);
+      if (!ctx || !ctx.id) return;
+      if (Date.now() - ctx.ts > 86400000) { localStorage.removeItem('_reg_ctx'); return; } // expire after 24h
+      applyRegistryExtraFields(ctx.id, ctx.name);
+    } catch(e){}
+  }
+
+  // Hook into Ecwid's API loaded event so extra fields are set on every page
+  if (window.Ecwid && Ecwid.OnAPILoaded) {
+    Ecwid.OnAPILoaded.add(restoreRegistryContext);
+  } else {
+    // Ecwid not yet loaded — wait for it then register
+    var _regApiWait = setInterval(function(){
+      if (window.Ecwid && Ecwid.OnAPILoaded) {
+        clearInterval(_regApiWait);
+        Ecwid.OnAPILoaded.add(restoreRegistryContext);
+        restoreRegistryContext();
+      }
+    }, 300);
+  }
+  restoreRegistryContext();
 
   function mount(container){
     if (container.getAttribute('data-registry-mounted') === '1') return;
