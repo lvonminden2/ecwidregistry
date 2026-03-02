@@ -399,6 +399,23 @@ app.get("/admin/registry/:id", async (req, res) => {
   res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo });
 });
 
+app.post("/admin/registry/:id/edit", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+  const name = String(req.body.display_name || "").trim();
+  if (!name) {
+    const msg = encodeURIComponent("Registry name cannot be empty.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+  const date = String(req.body.event_date || "").trim() || null;
+  db.prepare(
+    "UPDATE registry SET display_name = ?, event_date = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(name, date, registryId);
+  const msg = encodeURIComponent("Registry updated.");
+  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
 app.post("/admin/registry/:id/items", async (req, res) => {
   const registryId = Number(req.params.id);
   const { product_id, product_name, product_sku, desired_qty } = req.body;

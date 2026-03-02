@@ -8,6 +8,20 @@
     <div>
       <h1><%= registry.display_name %></h1>
       <div class="muted"><%= registry.event_date || 'No date set' %> · <%= registry.status %></div>
+      <details class="edit-meta">
+        <summary>Edit name / date</summary>
+        <form method="post" action="/admin/registry/<%= registry.id %>/edit" class="edit-meta-form">
+          <label class="field">
+            <div class="label">Registry name</div>
+            <input name="display_name" type="text" value="<%= registry.display_name %>" required />
+          </label>
+          <label class="field">
+            <div class="label">Event date</div>
+            <input name="event_date" type="date" value="<%= registry.event_date || '' %>" />
+          </label>
+          <button class="btn" type="submit">Save</button>
+        </form>
+      </details>
     </div>
   </div>
   <div class="toolbar-actions">

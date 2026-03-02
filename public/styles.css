@@ -480,6 +480,31 @@ code {
   color: var(--accent);
 }
 
+/* ── Inline edit (name / date) ───────────── */
+.edit-meta { margin-top: 6px; }
+
+.edit-meta summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  list-style: none;
+}
+
+.edit-meta summary::-webkit-details-marker { display: none; }
+
+.edit-meta-form {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.edit-meta-form .field { margin-bottom: 0; }
+
 /* ── Photo upload ────────────────────────── */
 .toolbar-left {
   display: flex;
