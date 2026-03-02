@@ -172,31 +172,30 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
   <div class="card">
     <h2>Registrant Access</h2>
     <% if (!registrantAccount) { %>
-      <p class="muted" style="margin-bottom:14px">No portal account yet. Create one so the registrant can log in to view their registry and purchase history.</p>
+      <p class="muted" style="margin-bottom:14px">No portal access yet. Link an Ecwid customer account so the registrant can sign in with their existing store login.</p>
       <form method="post" action="/admin/registry/<%= registry.id %>/account">
         <label class="field">
-          <div class="label">Name</div>
+          <div class="label">Name (optional)</div>
           <input name="name" type="text" placeholder="e.g. Jane & John" />
         </label>
         <label class="field">
-          <div class="label">Email</div>
+          <div class="label">Registrant's Ecwid account email</div>
           <input name="email" type="email" required placeholder="registrant@example.com" />
-        </label>
-        <label class="field">
-          <div class="label">Password</div>
-          <input name="password" type="password" required minlength="6" placeholder="Min. 6 characters" />
         </label>
         <label class="radio-label" style="margin-bottom:14px">
           <input type="checkbox" name="can_add_items" value="1" style="width:auto" />
           <span>Allow registrant to add items</span>
         </label>
-        <button class="btn" type="submit">Create account</button>
+        <button class="btn" type="submit">Link account</button>
       </form>
     <% } else { %>
       <div class="row" style="padding-top:0">
         <div>
           <div class="strong"><%= registrantAccount.name || '(no name)' %></div>
           <div class="muted"><%= registrantAccount.email %></div>
+          <% if (registrantAccount.ecwid_customer_id) { %>
+            <div class="muted" style="font-size:11px">Ecwid customer #<%= registrantAccount.ecwid_customer_id %></div>
+          <% } %>
           <div class="muted" style="margin-top:4px">
             Can add items: <span class="strong"><%= registrantAccount.can_add_items ? 'Yes' : 'No' %></span>
           </div>
@@ -207,23 +206,11 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
           </form>
         </div>
       </div>
-      <details class="purchase-edit" style="margin-top:10px">
-        <summary>Reset password</summary>
-        <form method="post" action="/admin/registry/<%= registry.id %>/account/reset-password" class="purchase-edit-form" style="margin-top:10px">
-          <label class="field">
-            <div class="label">New password</div>
-            <input name="password" type="password" required minlength="6" placeholder="Min. 6 characters" />
-          </label>
-          <div class="row-actions">
-            <button class="btn secondary" type="submit">Save password</button>
-          </div>
-        </form>
-      </details>
-      <div style="margin-top:10px">
+      <div style="margin-top:12px">
         <a class="muted" style="font-size:11px;letter-spacing:0.05em;text-transform:uppercase" href="/portal/login" target="_blank" rel="noopener noreferrer">Open portal ↗</a>
       </div>
-      <form method="post" action="/admin/registry/<%= registry.id %>/account/delete" onsubmit="return confirm('Delete registrant account? They will no longer be able to log in.');" style="margin-top:14px">
-        <button class="btn secondary" type="submit" style="font-size:10px">Delete account</button>
+      <form method="post" action="/admin/registry/<%= registry.id %>/account/delete" onsubmit="return confirm('Remove registrant access? They will no longer be able to log in.');" style="margin-top:14px">
+        <button class="btn secondary" type="submit" style="font-size:10px">Remove access</button>
       </form>
     <% } %>
   </div>

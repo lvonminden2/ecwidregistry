@@ -8,30 +8,83 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/public/styles.css" />
+    <style>
+      .portal-login-wrap { max-width: 480px; margin: 0 auto; }
+      .portal-login-title { text-align: center; margin-bottom: 28px; }
+      .portal-login-title h1 { margin-bottom: 6px; }
+      .portal-ecwid-store { margin-top: 8px; }
+      .portal-login-hint { font-size: 13px; color: var(--muted); text-align: center; margin-top: 16px; }
+      .portal-checking { text-align: center; padding: 20px 0; color: var(--muted); font-size: 14px; }
+    </style>
   </head>
   <body>
-    <div class="page" style="max-width:440px">
-      <div style="text-align:center;margin-bottom:32px">
-        <h1 style="margin-bottom:4px">Registry Portal</h1>
-        <div class="muted">Sign in to view your registry &amp; gift list</div>
+    <div class="page portal-login-wrap">
+
+      <div class="portal-login-title">
+        <h1>Registry Portal</h1>
+        <div class="muted">Sign in with your store account to view your registry</div>
       </div>
 
+      <% if (error) { %>
+        <div class="card" style="margin-bottom:16px">
+          <div class="reg-error"><%= error %></div>
+        </div>
+      <% } %>
+
+      <!-- Hidden form posted automatically after Ecwid confirms the customer is signed in -->
+      <form id="ecwid-sso-form" method="post" action="/portal/login" style="display:none">
+        <input type="hidden" name="email" id="ecwid-sso-email" value="" />
+      </form>
+
       <div class="card">
-        <% if (error) { %>
-          <div class="reg-error" style="margin-bottom:16px"><%= error %></div>
-        <% } %>
-        <form method="post" action="/portal/login">
-          <label class="field">
-            <div class="label">Email</div>
-            <input name="email" type="email" required autofocus placeholder="your@email.com" />
-          </label>
-          <label class="field">
-            <div class="label">Password</div>
-            <input name="password" type="password" required placeholder="••••••••" />
-          </label>
-          <button class="btn" type="submit" style="width:100%;margin-top:4px">Sign in</button>
-        </form>
+        <div id="portal-checking" class="portal-checking">Checking sign-in status…</div>
+        <!-- Ecwid storefront renders here; it provides the sign-in widget -->
+        <div id="my-store-<%= ecwidStoreId %>" class="portal-ecwid-store"></div>
       </div>
+
+      <div class="portal-login-hint">
+        Sign in using the same account you use at Le Petite Gourmet Shoppe.
+      </div>
+
     </div>
+
+    <!-- Ecwid storefront script -->
+    <script src="https://app.ecwid.com/script.js?<%= ecwidStoreId %>" type="text/javascript" charset="utf-8"></script>
+    <script>
+    (function () {
+      var storeId = '<%= ecwidStoreId %>';
+      var checkingEl = document.getElementById('portal-checking');
+
+      function submitEmail(email) {
+        document.getElementById('ecwid-sso-email').value = email;
+        document.getElementById('ecwid-sso-form').submit();
+      }
+
+      // Fire when Ecwid's JS API is fully ready
+      Ecwid.OnAPILoaded.add(function () {
+        // Check whether the customer is already signed in
+        Ecwid.Customer.get(function (customer) {
+          if (customer && customer.email) {
+            // Already signed in — go straight to portal
+            submitEmail(customer.email);
+          } else {
+            // Not signed in — render the Ecwid account/sign-in page
+            if (checkingEl) checkingEl.style.display = 'none';
+            xProductBrowser(
+              'id=my-store-' + storeId,
+              'views=AccountSignIn'
+            );
+          }
+        });
+      });
+
+      // Fires whenever the customer profile changes (sign-in / sign-out)
+      Ecwid.OnSetProfile.add(function (customer) {
+        if (customer && customer.email) {
+          submitEmail(customer.email);
+        }
+      });
+    })();
+    </script>
   </body>
 </html>

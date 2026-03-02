@@ -155,6 +155,11 @@ const init = db.transaction(() => {
   if (!purchaseCols.includes("off_registry")) {
     db.exec("ALTER TABLE registry_purchase ADD COLUMN off_registry INTEGER NOT NULL DEFAULT 0");
   }
+  // registry_account migrations
+  const accountCols = db.prepare("PRAGMA table_info(registry_account)").all().map((c) => c.name);
+  if (!accountCols.includes("ecwid_customer_id")) {
+    db.exec("ALTER TABLE registry_account ADD COLUMN ecwid_customer_id TEXT");
+  }
 });
 init();
 
@@ -327,25 +332,6 @@ async function fetchEcwidProductBySku(sku, storeId, accessToken) {
   if (exact) return { product: exact, error: null };
   if (result.items.length > 0) return { product: result.items[0], error: null };
   return { product: null, error: "No Ecwid product found for that SKU." };
-}
-
-// ── Password helpers (scrypt, no extra dependencies) ──────────────────────────
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, stored) {
-  try {
-    const [salt, hash] = stored.split(":");
-    return crypto.timingSafeEqual(
-      Buffer.from(hash, "hex"),
-      crypto.scryptSync(password, salt, 64)
-    );
-  } catch {
-    return false;
-  }
 }
 
 // ── Registrant portal auth middleware ─────────────────────────────────────────
@@ -706,22 +692,17 @@ app.get("/admin/registry/:id/print", (req, res) => {
 });
 
 // ── Registrant account management (admin) ─────────────────────────────────────
-app.post("/admin/registry/:id/account", (req, res) => {
+app.post("/admin/registry/:id/account", async (req, res) => {
   const registryId = Number(req.params.id);
   const registry = getRegistryById(registryId);
   if (!registry) return res.status(404).send("Not found");
 
   const name = String(req.body.name || "").trim() || null;
   const email = String(req.body.email || "").trim().toLowerCase();
-  const password = String(req.body.password || "").trim();
   const canAddItems = req.body.can_add_items ? 1 : 0;
 
   if (!email) {
     const msg = encodeURIComponent("Email is required.");
-    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
-  }
-  if (!password || password.length < 6) {
-    const msg = encodeURIComponent("Password must be at least 6 characters.");
     return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
   }
 
@@ -731,36 +712,29 @@ app.post("/admin/registry/:id/account", (req, res) => {
     return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
   }
 
-  const passwordHash = hashPassword(password);
+  // Try to look up the Ecwid customer ID for this email (best-effort)
+  let ecwidCustomerId = null;
+  if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID) {
+    try {
+      const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/customers?email=${encodeURIComponent(email)}&limit=1`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.items && data.items.length > 0) {
+          ecwidCustomerId = String(data.items[0].id);
+        }
+      }
+    } catch {
+      // non-fatal — proceed without customer ID
+    }
+  }
+
+  // password_hash column still exists for schema compat; store empty placeholder
   db.prepare(
-    "INSERT INTO registry_account (registry_id, name, email, password_hash, can_add_items) VALUES (?, ?, ?, ?, ?)"
-  ).run(registryId, name, email, passwordHash, canAddItems);
+    "INSERT INTO registry_account (registry_id, name, email, password_hash, can_add_items, ecwid_customer_id) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(registryId, name, email, "", canAddItems, ecwidCustomerId);
 
-  const msg = encodeURIComponent("Registrant account created.");
-  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
-});
-
-app.post("/admin/registry/:id/account/reset-password", (req, res) => {
-  const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
-  if (!registry) return res.status(404).send("Not found");
-
-  const password = String(req.body.password || "").trim();
-  if (!password || password.length < 6) {
-    const msg = encodeURIComponent("Password must be at least 6 characters.");
-    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
-  }
-
-  const account = db.prepare("SELECT id FROM registry_account WHERE registry_id = ?").get(registryId);
-  if (!account) {
-    const msg = encodeURIComponent("No account found for this registry.");
-    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
-  }
-
-  const passwordHash = hashPassword(password);
-  db.prepare("UPDATE registry_account SET password_hash = ? WHERE registry_id = ?").run(passwordHash, registryId);
-
-  const msg = encodeURIComponent("Password updated.");
+  const msg = encodeURIComponent("Registrant account linked.");
   return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
 });
 
@@ -797,21 +771,21 @@ app.post("/admin/registry/:id/account/delete", (req, res) => {
 app.get("/portal/login", (req, res) => {
   if (req.session.registrantId) return res.redirect("/portal");
   const error = String(req.query.error || "").trim();
-  res.render("portal/login", { error });
+  res.render("portal/login", { error, ecwidStoreId: ECWID_STORE_ID });
 });
 
+// Called by the client-side Ecwid SSO script after the customer signs in
 app.post("/portal/login", (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
-  const password = String(req.body.password || "").trim();
 
-  if (!email || !password) {
-    const msg = encodeURIComponent("Email and password are required.");
+  if (!email) {
+    const msg = encodeURIComponent("No email received from Ecwid.");
     return res.redirect(`/portal/login?error=${msg}`);
   }
 
-  const account = db.prepare("SELECT * FROM registry_account WHERE email = ?").get(email);
-  if (!account || !verifyPassword(password, account.password_hash)) {
-    const msg = encodeURIComponent("Incorrect email or password.");
+  const account = db.prepare("SELECT * FROM registry_account WHERE LOWER(email) = ?").get(email);
+  if (!account) {
+    const msg = encodeURIComponent("No registry is linked to this Ecwid account. Please contact the store.");
     return res.redirect(`/portal/login?error=${msg}`);
   }
 
