@@ -1130,6 +1130,63 @@ app.get("/widget/registry.js", (req, res) => {
   }
   restoreRegistryContext();
 
+  // ── Portal link in Ecwid storefront account pages ──────────────────────────
+  // When a logged-in customer visits their Ecwid account section, show a
+  // "View Registry Portal" link so they can jump directly to the portal.
+  (function(){
+    var _plId  = 'registry-portal-account-link';
+    var _plUrl = baseUrl + '/portal/login';
+    var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES','RESET_PASSWORD','SIGN_IN'];
+
+    function _removePL(){
+      var el = document.getElementById(_plId);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    }
+
+    function _injectPL(){
+      if (document.getElementById(_plId)) return;
+      if (!window.Ecwid || !Ecwid.Customer) return;
+      Ecwid.Customer.get(function(customer){
+        if (!customer || !customer.email) return;
+        var div = document.createElement('div');
+        div.id = _plId;
+        div.innerHTML =
+          '<div style="padding:12px 16px;margin-bottom:8px;background:#fff7f2;' +
+          'border:1px solid #e8ddd4;border-radius:4px;font-family:inherit;">' +
+            '<a href="' + _plUrl + '" style="color:#7c3040;font-size:14px;' +
+            'font-weight:500;text-decoration:none;">' +
+              'View your Registry Portal \u2192' +
+            '</a>' +
+          '</div>';
+        // Insert just before the Ecwid store container element
+        var storeEl = document.querySelector('[id^="my-store-"]');
+        if (storeEl && storeEl.parentNode) {
+          storeEl.parentNode.insertBefore(div, storeEl);
+        }
+      });
+    }
+
+    function _onPage(page){
+      _removePL();
+      if (page && _acctPages.indexOf(page.type) !== -1) _injectPL();
+    }
+
+    function _hookPL(){
+      if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(_onPage);
+    }
+
+    if (window.Ecwid && Ecwid.OnAPILoaded) {
+      Ecwid.OnAPILoaded.add(_hookPL);
+    } else {
+      var _plWait = setInterval(function(){
+        if (window.Ecwid && Ecwid.OnAPILoaded){
+          clearInterval(_plWait);
+          Ecwid.OnAPILoaded.add(_hookPL);
+        }
+      }, 300);
+    }
+  })();
+
   function mount(container){
     if (container.getAttribute('data-registry-mounted') === '1') return;
     container.setAttribute('data-registry-mounted', '1');
