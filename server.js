@@ -768,28 +768,56 @@ app.post("/admin/registry/:id/account/delete", (req, res) => {
 });
 
 // ── Registrant portal ─────────────────────────────────────────────────────────
+
+// Allow cross-origin preflight for portal login (used by Ecwid storefront inline embed)
+app.options("/portal/login", (req, res) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
+  }
+  res.status(204).end();
+});
+
 app.get("/portal/login", (req, res) => {
   if (req.session.registrantId) return res.redirect("/portal");
   const error = String(req.query.error || "").trim();
   res.render("portal/login", { error, ecwidStoreId: ECWID_STORE_ID });
 });
 
-// Called by the client-side Ecwid SSO script after the customer signs in
+// Accepts email from either Ecwid SSO page (form POST) or widget inline embed (JSON fetch)
 app.post("/portal/login", (req, res) => {
+  // CORS for cross-origin fetch calls from the Ecwid storefront
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+
+  const isJson = !!(
+    req.headers.accept?.includes("application/json") ||
+    req.headers["content-type"]?.includes("application/json")
+  );
+
   const email = String(req.body.email || "").trim().toLowerCase();
 
   if (!email) {
+    if (isJson) return res.json({ ok: false, error: "No email provided." });
     const msg = encodeURIComponent("No email received from Ecwid.");
     return res.redirect(`/portal/login?error=${msg}`);
   }
 
   const account = db.prepare("SELECT * FROM registry_account WHERE LOWER(email) = ?").get(email);
   if (!account) {
+    if (isJson) return res.json({ ok: false, error: "No registry is linked to this Ecwid account." });
     const msg = encodeURIComponent("No registry is linked to this Ecwid account. Please contact the store.");
     return res.redirect(`/portal/login?error=${msg}`);
   }
 
   req.session.registrantId = account.id;
+  if (isJson) return res.json({ ok: true });
   return res.redirect("/portal");
 });
 
@@ -1130,45 +1158,72 @@ app.get("/widget/registry.js", (req, res) => {
   }
   restoreRegistryContext();
 
-  // ── Portal link in Ecwid storefront account pages ──────────────────────────
-  // When a logged-in customer visits their Ecwid account section, show a
-  // "View Registry Portal" link so they can jump directly to the portal.
+  // ── Registry portal inline in Ecwid account section ───────────────────────
+  // When a logged-in customer visits their Ecwid account section, silently
+  // authenticate them with our server and embed the registry portal as an
+  // inline iframe — no separate page required.
   (function(){
-    var _plId  = 'registry-portal-account-link';
-    var _plUrl = baseUrl + '/portal/login';
-    var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES','RESET_PASSWORD','SIGN_IN'];
+    var _plId = 'registry-portal-inline-wrap';
+    var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES','RESET_PASSWORD'];
 
     function _removePL(){
       var el = document.getElementById(_plId);
       if (el && el.parentNode) el.parentNode.removeChild(el);
     }
 
-    function _injectPL(){
+    function _injectPortal(email){
       if (document.getElementById(_plId)) return;
-      if (!window.Ecwid || !Ecwid.Customer) return;
-      Ecwid.Customer.get(function(customer){
-        if (!customer || !customer.email) return;
-        var div = document.createElement('div');
-        div.id = _plId;
-        div.innerHTML =
-          '<div style="padding:12px 16px;margin-bottom:8px;background:#fff7f2;' +
-          'border:1px solid #e8ddd4;border-radius:4px;font-family:inherit;">' +
-            '<a href="' + _plUrl + '" style="color:#7c3040;font-size:14px;' +
-            'font-weight:500;text-decoration:none;">' +
-              'View your Registry Portal \u2192' +
-            '</a>' +
-          '</div>';
-        // Insert just before the Ecwid store container element
+
+      // Silently authenticate with our server; this sets the portal session cookie
+      fetch(baseUrl + '/portal/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: email })
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if (!data.ok) return; // no registry linked for this customer — stay silent
+
+        var wrap = document.createElement('div');
+        wrap.id = _plId;
+        wrap.style.cssText = 'margin-bottom:24px;';
+
+        var iframe = document.createElement('iframe');
+        iframe.id = 'registry-portal-frame';
+        iframe.src = baseUrl + '/portal';
+        iframe.style.cssText = 'width:100%;border:none;display:block;overflow:hidden;min-height:400px;';
+        iframe.scrolling = 'no';
+        iframe.setAttribute('frameborder', '0');
+        iframe.setAttribute('allowtransparency', 'true');
+
+        // Auto-resize the iframe to fit its content via postMessage from /portal
+        window.addEventListener('message', function(evt){
+          if (evt.data && evt.data.type === 'registry-portal-height') {
+            iframe.style.height = (Number(evt.data.height) + 40) + 'px';
+          }
+        });
+
+        wrap.appendChild(iframe);
+
+        // Insert the portal before the Ecwid store container
         var storeEl = document.querySelector('[id^="my-store-"]');
         if (storeEl && storeEl.parentNode) {
-          storeEl.parentNode.insertBefore(div, storeEl);
+          storeEl.parentNode.insertBefore(wrap, storeEl);
+        } else {
+          document.body.insertAdjacentElement('afterbegin', wrap);
         }
-      });
+      })
+      .catch(function(){});
     }
 
     function _onPage(page){
       _removePL();
-      if (page && _acctPages.indexOf(page.type) !== -1) _injectPL();
+      if (!(page && _acctPages.indexOf(page.type) !== -1)) return;
+      if (!window.Ecwid || !Ecwid.Customer) return;
+      Ecwid.Customer.get(function(customer){
+        if (customer && customer.email) _injectPortal(customer.email);
+      });
     }
 
     function _hookPL(){

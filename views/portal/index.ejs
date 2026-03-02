@@ -114,5 +114,25 @@
       </div>
 
     </div>
+
+    <script>
+    // When embedded as an iframe inside the Ecwid storefront, report our height
+    // so the parent page can resize the iframe to fit content without scrollbars.
+    (function(){
+      function postHeight(){
+        if (window.parent !== window){
+          window.parent.postMessage(
+            { type: 'registry-portal-height', height: document.documentElement.scrollHeight },
+            '*'
+          );
+        }
+      }
+      window.addEventListener('load', postHeight);
+      window.addEventListener('resize', postHeight);
+      if (window.MutationObserver){
+        new MutationObserver(postHeight).observe(document.body, { subtree: true, childList: true });
+      }
+    })();
+    </script>
   </body>
 </html>
