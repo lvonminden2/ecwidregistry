@@ -31,7 +31,7 @@ app.set("views", path.join(__dirname, "views"));
 app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 app.use(express.json({ limit: "12mb" }));
 app.use((req, res, next) => {
-  if (req.path.startsWith("/api/") || req.path === "/widget/registry.js") {
+  if (req.path.startsWith("/api/") || req.path === "/widget/registry.js" || req.path === "/widget/portal.js") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -1521,6 +1521,98 @@ app.get("/widget/registry.js", (req, res) => {
       clearInterval(timer);
     }
   }, 250);
+})();
+  `);
+});
+
+// ── Standalone portal injection script ──────────────────────────────────────
+// Load this on every page of the Ecwid storefront (global custom JS / footer code).
+// It silently detects logged-in customers with a linked registry and embeds the
+// portal as an inline iframe inside their account section — no separate page needed.
+app.get("/widget/portal.js", (req, res) => {
+  res.type("application/javascript");
+  res.send(`
+(function(){
+  var baseUrl = "${BASE_URL}";
+  var _plId   = 'registry-portal-inline-wrap';
+  var _frameId = 'registry-portal-iframe';
+  var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES','RESET_PASSWORD','SIGN_IN'];
+
+  function _removePL(){
+    var el = document.getElementById(_plId);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  function _injectPortal(email){
+    if (document.getElementById(_plId)) return;
+    fetch(baseUrl + '/portal/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email: email })
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(data){
+      if (!data || !data.ok) return; // no registry linked — stay silent
+
+      var wrap = document.createElement('div');
+      wrap.id = _plId;
+      wrap.style.cssText = 'margin:0 0 24px;';
+
+      var iframe = document.createElement('iframe');
+      iframe.id = _frameId;
+      iframe.src = baseUrl + '/portal';
+      iframe.style.cssText = 'width:100%;min-height:400px;border:none;display:block;overflow:hidden;';
+      iframe.scrolling = 'no';
+      iframe.frameBorder = '0';
+
+      wrap.appendChild(iframe);
+
+      // Auto-resize the iframe to its content via postMessage
+      window.addEventListener('message', function(evt){
+        if (evt.data && evt.data.type === 'registry-portal-height'){
+          iframe.style.height = (Number(evt.data.height) + 40) + 'px';
+        }
+      });
+
+      // Insert the portal before the Ecwid store container (or at the top of body)
+      var storeEl = document.querySelector('[id^="my-store-"]');
+      if (storeEl && storeEl.parentNode){
+        storeEl.parentNode.insertBefore(wrap, storeEl);
+      } else {
+        (document.querySelector('.ecwid-shoppingcart-widget') || document.body)
+          .insertAdjacentElement('afterbegin', wrap);
+      }
+    })
+    .catch(function(){});
+  }
+
+  function _onPage(page){
+    _removePL();
+    if (!page || _acctPages.indexOf(page.type) === -1) return;
+    if (!window.Ecwid || !Ecwid.Customer) return;
+    Ecwid.Customer.get(function(customer){
+      if (customer && customer.email) _injectPortal(customer.email);
+    });
+  }
+
+  function _init(){
+    if (window.Ecwid && Ecwid.OnPageLoad){
+      Ecwid.OnPageLoad.add(_onPage);
+    } else {
+      var _t = setInterval(function(){
+        if (window.Ecwid && Ecwid.OnPageLoad){ clearInterval(_t); Ecwid.OnPageLoad.add(_onPage); }
+      }, 300);
+    }
+  }
+
+  if (window.Ecwid && Ecwid.OnAPILoaded){
+    Ecwid.OnAPILoaded.add(_init);
+  } else {
+    var _t2 = setInterval(function(){
+      if (window.Ecwid && Ecwid.OnAPILoaded){ clearInterval(_t2); Ecwid.OnAPILoaded.add(_init); }
+    }, 300);
+  }
 })();
   `);
 });
