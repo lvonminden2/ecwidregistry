@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title><%= registry.display_name %> — Registry Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/public/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+
+      <!-- Portal header -->
+      <div class="portal-header">
+        <div>
+          <h1><%= registry.display_name %></h1>
+          <div class="muted"><%= registry.event_date ? registry.event_date + ' · ' : '' %>Registry Portal</div>
+        </div>
+        <a class="btn secondary" href="/portal/logout">Log out</a>
+      </div>
+
+      <% if (actionError) { %>
+        <div class="card"><div class="reg-error"><%= actionError %></div></div>
+      <% } %>
+      <% if (actionInfo) { %>
+        <div class="card"><div class="muted"><%= actionInfo %></div></div>
+      <% } %>
+
+      <!-- Add item form (only when allowed) -->
+      <% if (account.can_add_items) { %>
+        <div class="card portal-section">
+          <h2>Add item to registry</h2>
+          <form method="post" action="/portal/items">
+            <div class="grid" style="margin-bottom:0">
+              <label class="field" style="margin-bottom:0">
+                <div class="label">Item name</div>
+                <input name="product_name" type="text" required placeholder="e.g. KitchenAid Stand Mixer" />
+              </label>
+              <label class="field" style="margin-bottom:0">
+                <div class="label">SKU (optional)</div>
+                <input name="product_sku" type="text" placeholder="e.g. KSM150PSER" />
+              </label>
+              <label class="field" style="margin-bottom:0">
+                <div class="label">Desired quantity</div>
+                <input name="desired_qty" type="number" min="1" value="1" style="max-width:100px" />
+              </label>
+            </div>
+            <button class="btn" type="submit" style="margin-top:16px">Add item</button>
+          </form>
+        </div>
+      <% } %>
+
+      <!-- Registry items -->
+      <div class="card portal-section">
+        <h2>Registry items</h2>
+        <% if (items.length === 0) { %>
+          <div class="muted">No items on this registry yet.</div>
+        <% } else { %>
+          <div class="portal-items-grid">
+            <div class="portal-items-header">
+              <span>Item</span>
+              <span>Wanted</span>
+              <span>Purchased</span>
+              <span>Still needed</span>
+            </div>
+            <% items.forEach(item => { %>
+              <div class="portal-items-row">
+                <div>
+                  <div class="strong"><%= item.product_name || 'Registry item' %></div>
+                  <% if (item.product_sku) { %>
+                    <div class="muted">SKU: <%= item.product_sku %></div>
+                  <% } %>
+                </div>
+                <div class="muted"><%= item.desired_qty %></div>
+                <div class="muted"><%= item.purchased_qty %></div>
+                <div class="<%= item.still_needed > 0 ? 'portal-still-needed' : 'portal-fulfilled' %>">
+                  <%= item.still_needed > 0 ? item.still_needed : '✓' %>
+                </div>
+              </div>
+            <% }) %>
+          </div>
+        <% } %>
+      </div>
+
+      <!-- Purchase history -->
+      <div class="card portal-section">
+        <h2>Gift tracker</h2>
+        <p class="muted" style="margin-bottom:16px;font-size:13px">Use this to write your thank-you notes.</p>
+        <% if (purchases.length === 0) { %>
+          <div class="muted">No purchases recorded yet.</div>
+        <% } else { %>
+          <% purchases.forEach(p => { %>
+            <% if (!p.off_registry) { %>
+              <div class="row">
+                <div>
+                  <div class="strong"><%= p.display_product_name || 'Registry item' %><% if (p.qty > 1) { %> &times; <%= p.qty %><% } %></div>
+                  <div class="muted">
+                    <% if (p.buyer_name) { %>Gift from <%= p.buyer_name %><% if (p.buyer_email) { %> (<%= p.buyer_email %>)<% } %><% } else { %>Unknown buyer<% } %>
+                  </div>
+                  <% if (p.notes) { %>
+                    <div class="muted">Note: <%= p.notes %></div>
+                  <% } %>
+                </div>
+                <div class="muted" style="white-space:nowrap;font-size:11px"><%= p.created_at.split(' ')[0] %></div>
+              </div>
+            <% } %>
+          <% }) %>
+          <% if (purchases.filter(p => !p.off_registry).length === 0) { %>
+            <div class="muted">No on-registry purchases recorded yet.</div>
+          <% } %>
+        <% } %>
+      </div>
+
+    </div>
+  </body>
+</html>

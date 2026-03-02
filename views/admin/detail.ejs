@@ -170,6 +170,65 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
   </div>
 
   <div class="card">
+    <h2>Registrant Access</h2>
+    <% if (!registrantAccount) { %>
+      <p class="muted" style="margin-bottom:14px">No portal account yet. Create one so the registrant can log in to view their registry and purchase history.</p>
+      <form method="post" action="/admin/registry/<%= registry.id %>/account">
+        <label class="field">
+          <div class="label">Name</div>
+          <input name="name" type="text" placeholder="e.g. Jane & John" />
+        </label>
+        <label class="field">
+          <div class="label">Email</div>
+          <input name="email" type="email" required placeholder="registrant@example.com" />
+        </label>
+        <label class="field">
+          <div class="label">Password</div>
+          <input name="password" type="password" required minlength="6" placeholder="Min. 6 characters" />
+        </label>
+        <label class="radio-label" style="margin-bottom:14px">
+          <input type="checkbox" name="can_add_items" value="1" style="width:auto" />
+          <span>Allow registrant to add items</span>
+        </label>
+        <button class="btn" type="submit">Create account</button>
+      </form>
+    <% } else { %>
+      <div class="row" style="padding-top:0">
+        <div>
+          <div class="strong"><%= registrantAccount.name || '(no name)' %></div>
+          <div class="muted"><%= registrantAccount.email %></div>
+          <div class="muted" style="margin-top:4px">
+            Can add items: <span class="strong"><%= registrantAccount.can_add_items ? 'Yes' : 'No' %></span>
+          </div>
+        </div>
+        <div class="row-actions">
+          <form method="post" action="/admin/registry/<%= registry.id %>/account/toggle-items">
+            <button class="btn secondary" type="submit"><%= registrantAccount.can_add_items ? 'Disable adding' : 'Allow adding' %></button>
+          </form>
+        </div>
+      </div>
+      <details class="purchase-edit" style="margin-top:10px">
+        <summary>Reset password</summary>
+        <form method="post" action="/admin/registry/<%= registry.id %>/account/reset-password" class="purchase-edit-form" style="margin-top:10px">
+          <label class="field">
+            <div class="label">New password</div>
+            <input name="password" type="password" required minlength="6" placeholder="Min. 6 characters" />
+          </label>
+          <div class="row-actions">
+            <button class="btn secondary" type="submit">Save password</button>
+          </div>
+        </form>
+      </details>
+      <div style="margin-top:10px">
+        <a class="muted" style="font-size:11px;letter-spacing:0.05em;text-transform:uppercase" href="/portal/login" target="_blank" rel="noopener noreferrer">Open portal ↗</a>
+      </div>
+      <form method="post" action="/admin/registry/<%= registry.id %>/account/delete" onsubmit="return confirm('Delete registrant account? They will no longer be able to log in.');" style="margin-top:14px">
+        <button class="btn secondary" type="submit" style="font-size:10px">Delete account</button>
+      </form>
+    <% } %>
+  </div>
+
+  <div class="card">
     <h2>Mark purchase (in-store)</h2>
     <form method="post" action="/admin/registry/<%= registry.id %>/purchases">
       <input type="hidden" name="channel" value="in_store" />

@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Registry Portal — Le Petite Gourmet Shoppe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/public/styles.css" />
+  </head>
+  <body>
+    <div class="page" style="max-width:440px">
+      <div style="text-align:center;margin-bottom:32px">
+        <h1 style="margin-bottom:4px">Registry Portal</h1>
+        <div class="muted">Sign in to view your registry &amp; gift list</div>
+      </div>
+
+      <div class="card">
+        <% if (error) { %>
+          <div class="reg-error" style="margin-bottom:16px"><%= error %></div>
+        <% } %>
+        <form method="post" action="/portal/login">
+          <label class="field">
+            <div class="label">Email</div>
+            <input name="email" type="email" required autofocus placeholder="your@email.com" />
+          </label>
+          <label class="field">
+            <div class="label">Password</div>
+            <input name="password" type="password" required placeholder="••••••••" />
+          </label>
+          <button class="btn" type="submit" style="width:100%;margin-top:4px">Sign in</button>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>

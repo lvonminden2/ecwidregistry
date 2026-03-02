@@ -552,6 +552,57 @@ code {
   gap: 12px;
 }
 
+/* ── Portal ──────────────────────────────── */
+.portal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.portal-section { margin-bottom: 0; }
+
+.portal-items-grid {
+  display: grid;
+  gap: 0;
+}
+
+.portal-items-header {
+  display: grid;
+  grid-template-columns: 1fr 80px 80px 100px;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.portal-items-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 80px 100px;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.portal-items-row:last-child { border-bottom: none; }
+
+.portal-still-needed {
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.portal-fulfilled {
+  font-weight: 500;
+  color: #2a6e3f;
+}
+
 /* ── Responsive ──────────────────────────── */
 @media (max-width: 720px) {
   .toolbar { flex-direction: column; align-items: flex-start; gap: 10px; }

@@ -114,6 +114,20 @@ const init = db.transaction(() => {
     );
   `);
 
+  // registry_account table — one account per registry (registrant portal access)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS registry_account (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      registry_id INTEGER NOT NULL UNIQUE,
+      name TEXT,
+      email TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      can_add_items INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (registry_id) REFERENCES registry(id)
+    );
+  `);
+
   const cols = db.prepare("PRAGMA table_info(registry)").all().map((c) => c.name);
   if (!cols.includes("store_id")) {
     db.exec("ALTER TABLE registry ADD COLUMN store_id TEXT");
@@ -315,6 +329,31 @@ async function fetchEcwidProductBySku(sku, storeId, accessToken) {
   return { product: null, error: "No Ecwid product found for that SKU." };
 }
 
+// ── Password helpers (scrypt, no extra dependencies) ──────────────────────────
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  try {
+    const [salt, hash] = stored.split(":");
+    return crypto.timingSafeEqual(
+      Buffer.from(hash, "hex"),
+      crypto.scryptSync(password, salt, 64)
+    );
+  } catch {
+    return false;
+  }
+}
+
+// ── Registrant portal auth middleware ─────────────────────────────────────────
+function requireRegistrant(req, res, next) {
+  if (!req.session.registrantId) return res.redirect("/portal/login");
+  next();
+}
+
 // Native app iframe entrypoint
 app.get("/ecwid/iframe", (req, res) => {
   // Allow Ecwid to embed this page in an iframe
@@ -396,7 +435,10 @@ app.get("/admin/registry/:id", async (req, res) => {
     skuResults = result.items;
     skuError = result.error;
   }
-  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo });
+  const registrantAccount = db
+    .prepare("SELECT * FROM registry_account WHERE registry_id = ?")
+    .get(registryId) || null;
+  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount });
 });
 
 app.post("/admin/registry/:id/edit", (req, res) => {
@@ -661,6 +703,206 @@ app.get("/admin/registry/:id/print", (req, res) => {
   if (!registry) return res.status(404).send("Not found");
   const items = getRegistryItems(registryId);
   res.render("admin/print", { registry, items });
+});
+
+// ── Registrant account management (admin) ─────────────────────────────────────
+app.post("/admin/registry/:id/account", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+
+  const name = String(req.body.name || "").trim() || null;
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const password = String(req.body.password || "").trim();
+  const canAddItems = req.body.can_add_items ? 1 : 0;
+
+  if (!email) {
+    const msg = encodeURIComponent("Email is required.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+  if (!password || password.length < 6) {
+    const msg = encodeURIComponent("Password must be at least 6 characters.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+
+  const existing = db.prepare("SELECT id FROM registry_account WHERE registry_id = ?").get(registryId);
+  if (existing) {
+    const msg = encodeURIComponent("An account already exists for this registry.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+
+  const passwordHash = hashPassword(password);
+  db.prepare(
+    "INSERT INTO registry_account (registry_id, name, email, password_hash, can_add_items) VALUES (?, ?, ?, ?, ?)"
+  ).run(registryId, name, email, passwordHash, canAddItems);
+
+  const msg = encodeURIComponent("Registrant account created.");
+  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
+app.post("/admin/registry/:id/account/reset-password", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+
+  const password = String(req.body.password || "").trim();
+  if (!password || password.length < 6) {
+    const msg = encodeURIComponent("Password must be at least 6 characters.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+
+  const account = db.prepare("SELECT id FROM registry_account WHERE registry_id = ?").get(registryId);
+  if (!account) {
+    const msg = encodeURIComponent("No account found for this registry.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+
+  const passwordHash = hashPassword(password);
+  db.prepare("UPDATE registry_account SET password_hash = ? WHERE registry_id = ?").run(passwordHash, registryId);
+
+  const msg = encodeURIComponent("Password updated.");
+  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
+app.post("/admin/registry/:id/account/toggle-items", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+
+  const account = db.prepare("SELECT id, can_add_items FROM registry_account WHERE registry_id = ?").get(registryId);
+  if (!account) {
+    const msg = encodeURIComponent("No account found for this registry.");
+    return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
+  }
+
+  const newVal = account.can_add_items ? 0 : 1;
+  db.prepare("UPDATE registry_account SET can_add_items = ? WHERE registry_id = ?").run(newVal, registryId);
+
+  const msg = encodeURIComponent(newVal ? "Registrant can now add items." : "Registrant can no longer add items.");
+  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
+app.post("/admin/registry/:id/account/delete", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+
+  db.prepare("DELETE FROM registry_account WHERE registry_id = ?").run(registryId);
+
+  const msg = encodeURIComponent("Registrant account deleted.");
+  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
+// ── Registrant portal ─────────────────────────────────────────────────────────
+app.get("/portal/login", (req, res) => {
+  if (req.session.registrantId) return res.redirect("/portal");
+  const error = String(req.query.error || "").trim();
+  res.render("portal/login", { error });
+});
+
+app.post("/portal/login", (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const password = String(req.body.password || "").trim();
+
+  if (!email || !password) {
+    const msg = encodeURIComponent("Email and password are required.");
+    return res.redirect(`/portal/login?error=${msg}`);
+  }
+
+  const account = db.prepare("SELECT * FROM registry_account WHERE email = ?").get(email);
+  if (!account || !verifyPassword(password, account.password_hash)) {
+    const msg = encodeURIComponent("Incorrect email or password.");
+    return res.redirect(`/portal/login?error=${msg}`);
+  }
+
+  req.session.registrantId = account.id;
+  return res.redirect("/portal");
+});
+
+app.get("/portal/logout", (req, res) => {
+  req.session.destroy(() => {
+    res.redirect("/portal/login");
+  });
+});
+
+app.get("/portal", requireRegistrant, (req, res) => {
+  const account = db.prepare("SELECT * FROM registry_account WHERE id = ?").get(req.session.registrantId);
+  if (!account) {
+    req.session.destroy(() => res.redirect("/portal/login"));
+    return;
+  }
+  const registry = getRegistryById(account.registry_id);
+  if (!registry) {
+    const msg = encodeURIComponent("Registry not found.");
+    return res.redirect(`/portal/login?error=${msg}`);
+  }
+  const items = getRegistryItems(account.registry_id);
+  const purchases = getRegistryPurchases(account.registry_id);
+  const actionInfo = String(req.query.info || "").trim();
+  const actionError = String(req.query.error || "").trim();
+  res.render("portal/index", { account, registry, items, purchases, actionInfo, actionError });
+});
+
+app.post("/portal/items", requireRegistrant, async (req, res) => {
+  const account = db.prepare("SELECT * FROM registry_account WHERE id = ?").get(req.session.registrantId);
+  if (!account) return res.redirect("/portal/login");
+  if (!account.can_add_items) {
+    const msg = encodeURIComponent("You do not have permission to add items.");
+    return res.redirect(`/portal?error=${msg}`);
+  }
+
+  const registryId = account.registry_id;
+  const itemName = String(req.body.product_name || "").trim();
+  const sku = String(req.body.product_sku || "").trim() || null;
+  const desiredQty = Number(req.body.desired_qty || 1);
+
+  if (!itemName) {
+    const msg = encodeURIComponent("Item name is required.");
+    return res.redirect(`/portal?error=${msg}`);
+  }
+  if (!Number.isInteger(desiredQty) || desiredQty < 1) {
+    const msg = encodeURIComponent("Quantity must be at least 1.");
+    return res.redirect(`/portal?error=${msg}`);
+  }
+
+  let productId = 0;
+  let finalName = itemName;
+  let finalSku = sku;
+
+  if (sku) {
+    const storeId = ECWID_STORE_ID;
+    const token = ECWID_ACCESS_TOKEN;
+    const result = await fetchEcwidProductBySku(sku, storeId, token);
+    if (result.product) {
+      productId = Number(result.product.id);
+      finalName = result.product.name || itemName;
+      finalSku = result.product.sku || sku;
+    }
+  }
+
+  const existingItem = db
+    .prepare("SELECT * FROM registry_item WHERE registry_id = ? AND product_id = ? AND product_id != 0 ORDER BY id DESC LIMIT 1")
+    .get(registryId, productId);
+
+  if (productId && existingItem) {
+    db.prepare(
+      "UPDATE registry_item SET desired_qty = ?, product_name = ?, product_sku = ? WHERE id = ?"
+    ).run(
+      existingItem.desired_qty + desiredQty,
+      finalName || existingItem.product_name,
+      finalSku || existingItem.product_sku,
+      existingItem.id
+    );
+    const msg = encodeURIComponent("Item already on registry — desired quantity increased.");
+    return res.redirect(`/portal?info=${msg}`);
+  }
+
+  db.prepare(
+    "INSERT INTO registry_item (registry_id, product_id, product_name, product_sku, desired_qty) VALUES (?, ?, ?, ?, ?)"
+  ).run(registryId, productId, finalName, finalSku, desiredQty);
+
+  const msg = encodeURIComponent("Item added to registry.");
+  return res.redirect(`/portal?info=${msg}`);
 });
 
 // Public pages
