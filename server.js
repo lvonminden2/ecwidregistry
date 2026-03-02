@@ -447,7 +447,9 @@ app.get("/admin/registry/:id", async (req, res) => {
   const registrantAccount = db
     .prepare("SELECT * FROM registry_account WHERE registry_id = ?")
     .get(registryId) || null;
-  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount });
+  const portalLoginUrl = `${BASE_URL}/portal/login`;
+  const portalWidgetUrl = `${BASE_URL}/widget/portal.js`;
+  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl });
 });
 
 app.post("/admin/registry/:id/edit", (req, res) => {
@@ -1561,7 +1563,7 @@ app.get("/widget/registry.js", (req, res) => {
 });
 
 // ── Standalone portal injection script ──────────────────────────────────────
-// Load this on every page of the Ecwid storefront (global custom JS / footer code).
+// Load this on every page of the Ecwid storefront via Settings > Custom JavaScript.
 // It silently detects logged-in customers with a linked registry and embeds the
 // portal as an inline iframe inside their account section — no separate page needed.
 app.get("/widget/portal.js", (req, res) => {
@@ -1571,8 +1573,10 @@ app.get("/widget/portal.js", (req, res) => {
   var baseUrl = "${BASE_URL}";
   var _plId   = 'registry-portal-inline-wrap';
   var _frameId = 'registry-portal-iframe';
+  var _initDone = false;
   // All Ecwid page types that constitute "the account section"
-  var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES','RESET_PASSWORD','SIGN_IN','ACCOUNT'];
+  var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES',
+                    'RESET_PASSWORD','SIGN_IN','ACCOUNT'];
 
   function _removePL(){
     var el = document.getElementById(_plId);
@@ -1581,20 +1585,16 @@ app.get("/widget/portal.js", (req, res) => {
 
   function _injectPortal(email){
     if (document.getElementById(_plId)) return;
-
-    // Exchange the customer email for a short-lived signed token.
-    // The token is passed as a URL param to the iframe so auth works even when
-    // the browser blocks third-party cookies (Safari ITP, Chrome Privacy Sandbox).
     fetch(baseUrl + '/portal/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({ email: email })
-      // Note: no credentials:'include' — we don't need the cookie here because
-      // the token in the iframe URL bootstraps the session server-side.
+      // No credentials:'include' — token in iframe URL handles auth
     })
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(data){
       if (!data || !data.ok || !data.token) return; // no registry linked — stay silent
+      if (document.getElementById(_plId)) return;   // guard against double-inject
 
       var wrap = document.createElement('div');
       wrap.id = _plId;
@@ -1602,13 +1602,12 @@ app.get("/widget/portal.js", (req, res) => {
 
       var iframe = document.createElement('iframe');
       iframe.id = _frameId;
-      // The token in the URL lets the server establish the session inside the iframe
-      // as a first-party request — no cross-site cookie needed.
+      // Token in URL bootstraps the session as a first-party request —
+      // no cross-site cookie needed (safe for Safari ITP / Chrome Privacy Sandbox).
       iframe.src = baseUrl + '/portal?token=' + encodeURIComponent(data.token);
       iframe.style.cssText = 'width:100%;min-height:400px;border:none;display:block;overflow:hidden;';
       iframe.scrolling = 'no';
       iframe.frameBorder = '0';
-
       wrap.appendChild(iframe);
 
       // Auto-resize the iframe to its content via postMessage
@@ -1618,13 +1617,14 @@ app.get("/widget/portal.js", (req, res) => {
         }
       });
 
-      // Insert the portal before the Ecwid store container (or at the top of body)
-      var storeEl = document.querySelector('[id^="my-store-"]');
+      // Insert before the Ecwid store container, or before the first Ecwid widget,
+      // or prepend to body as a last resort.
+      var storeEl = document.querySelector('[id^="my-store-"]') ||
+                    document.querySelector('[class*="ecwid"]');
       if (storeEl && storeEl.parentNode){
         storeEl.parentNode.insertBefore(wrap, storeEl);
       } else {
-        (document.querySelector('.ecwid-shoppingcart-widget') || document.body)
-          .insertAdjacentElement('afterbegin', wrap);
+        document.body.insertAdjacentElement('afterbegin', wrap);
       }
     })
     .catch(function(){});
@@ -1632,33 +1632,57 @@ app.get("/widget/portal.js", (req, res) => {
 
   function _checkPage(page){
     _removePL();
-    if (!page || _acctPages.indexOf(page.type) === -1) return;
+    if (!page) return;
+    if (_acctPages.indexOf(page.type) === -1) return;
     if (!window.Ecwid || !Ecwid.Customer) return;
     Ecwid.Customer.get(function(customer){
       if (customer && customer.email) _injectPortal(customer.email);
     });
   }
 
-  function _init(){
-    // Hook page navigation events
-    if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(_checkPage);
-    // Also fire for profile changes (customer signs in while on an account page)
-    if (window.Ecwid && Ecwid.OnSetProfile){
-      Ecwid.OnSetProfile.add(function(customer){
-        if (!customer || !customer.email) return;
-        // Re-check current page type
-        if (window.Ecwid && Ecwid.pages && Ecwid.pages.currentPage){
-          _checkPage(Ecwid.pages.currentPage);
-        }
-      });
+  function _checkCurrentPage(){
+    if (!window.Ecwid) return;
+    // Ecwid.pages.currentPage is available after the API loads
+    if (Ecwid.pages && Ecwid.pages.currentPage){
+      _checkPage(Ecwid.pages.currentPage);
     }
   }
 
-  if (window.Ecwid && Ecwid.OnAPILoaded){
-    Ecwid.OnAPILoaded.add(_init);
+  function _init(){
+    if (_initDone) return;
+    _initDone = true;
+    // Register for future SPA page changes
+    if (Ecwid.OnPageLoad)   Ecwid.OnPageLoad.add(_checkPage);
+    if (Ecwid.OnPageLoaded) Ecwid.OnPageLoaded.add(_checkPage);
+    // Re-check when the customer signs in while already on an account page
+    if (Ecwid.OnSetProfile){
+      Ecwid.OnSetProfile.add(function(customer){
+        if (!customer || !customer.email) return;
+        if (Ecwid.pages && Ecwid.pages.currentPage) _checkPage(Ecwid.pages.currentPage);
+      });
+    }
+    // Check the page the user is ALREADY on (initial load or late script injection)
+    _checkCurrentPage();
+  }
+
+  // hashchange fires on Ecwid SPA navigation in some store setups
+  window.addEventListener('hashchange', function(){ setTimeout(_checkCurrentPage, 350); });
+  window.addEventListener('popstate',   function(){ setTimeout(_checkCurrentPage, 350); });
+
+  // ── Bootstrap ────────────────────────────────────────────────────────────
+  // KEY FIX: if Ecwid is already on the page and fully loaded, call _init
+  // directly — OnAPILoaded will NOT fire again after the fact.
+  if (window.Ecwid && typeof Ecwid.OnAPILoaded !== 'undefined'){
+    Ecwid.OnAPILoaded.add(_init); // still register in case it fires after us
+    _init();                       // also call now in case it already fired
   } else {
+    // Ecwid not yet defined — poll until it appears, then hook in
     var _t = setInterval(function(){
-      if (window.Ecwid && Ecwid.OnAPILoaded){ clearInterval(_t); Ecwid.OnAPILoaded.add(_init); }
+      if (window.Ecwid && typeof Ecwid.OnAPILoaded !== 'undefined'){
+        clearInterval(_t);
+        Ecwid.OnAPILoaded.add(_init);
+        _init();
+      }
     }, 300);
   }
 })();

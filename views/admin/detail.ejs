@@ -206,10 +206,21 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
           </form>
         </div>
       </div>
-      <div style="margin-top:12px">
-        <a class="muted" style="font-size:11px;letter-spacing:0.05em;text-transform:uppercase" href="/portal/login" target="_blank" rel="noopener noreferrer">Open portal ↗</a>
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+        <div class="label" style="margin-bottom:6px">Direct portal link (share with registrant)</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <code style="flex:1;font-size:12px;background:var(--bg);padding:6px 8px;border:1px solid var(--border);border-radius:4px;overflow:auto;white-space:nowrap"><%= portalLoginUrl %></code>
+          <button class="btn secondary copy-link-btn" data-url="<%= portalLoginUrl %>" style="white-space:nowrap;flex-shrink:0">Copy</button>
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:6px">The registrant visits this link and signs in with their store account — no password required.</div>
       </div>
-      <form method="post" action="/admin/registry/<%= registry.id %>/account/delete" onsubmit="return confirm('Remove registrant access? They will no longer be able to log in.');" style="margin-top:14px">
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div class="label" style="margin-bottom:6px">Embed in Ecwid account section (optional)</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">To show the portal automatically when the registrant visits their Ecwid account, add this to <strong>Ecwid Control Panel → Settings → Design → Custom JavaScript</strong>:</div>
+        <code style="display:block;font-size:11px;background:var(--bg);padding:8px 10px;border:1px solid var(--border);border-radius:4px;overflow:auto;white-space:nowrap">&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;</code>
+        <button class="btn secondary copy-link-btn" data-url='&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;' style="margin-top:8px">Copy snippet</button>
+      </div>
+      <form method="post" action="/admin/registry/<%= registry.id %>/account/delete" onsubmit="return confirm('Remove registrant access? They will no longer be able to sign in.');" style="margin-top:16px">
         <button class="btn secondary" type="submit" style="font-size:10px">Remove access</button>
       </form>
     <% } %>
