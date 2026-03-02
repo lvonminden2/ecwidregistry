@@ -340,6 +340,29 @@ function requireRegistrant(req, res, next) {
   next();
 }
 
+// Short-lived signed token for cross-origin iframe bootstrap (avoids third-party cookie issues)
+function createPortalToken(accountId) {
+  const ts = Date.now();
+  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(`${accountId}:${ts}`).digest("hex");
+  return `${accountId}_${ts}_${sig}`;
+}
+function verifyPortalToken(token) {
+  try {
+    const parts = String(token || "").split("_");
+    if (parts.length !== 3) return null;
+    const [idStr, tsStr, sig] = parts;
+    const id = Number(idStr);
+    const ts = Number(tsStr);
+    if (!id || !ts) return null;
+    if (Date.now() - ts > 15 * 60 * 1000) return null; // 15-minute expiry
+    const expected = crypto.createHmac("sha256", SESSION_SECRET).update(`${id}:${ts}`).digest("hex");
+    if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
+    return db.prepare("SELECT * FROM registry_account WHERE id = ?").get(id) || null;
+  } catch {
+    return null;
+  }
+}
+
 // Native app iframe entrypoint
 app.get("/ecwid/iframe", (req, res) => {
   // Allow Ecwid to embed this page in an iframe
@@ -817,7 +840,7 @@ app.post("/portal/login", (req, res) => {
   }
 
   req.session.registrantId = account.id;
-  if (isJson) return res.json({ ok: true });
+  if (isJson) return res.json({ ok: true, token: createPortalToken(account.id) });
   return res.redirect("/portal");
 });
 
@@ -827,7 +850,19 @@ app.get("/portal/logout", (req, res) => {
   });
 });
 
-app.get("/portal", requireRegistrant, (req, res) => {
+app.get("/portal", (req, res) => {
+  // Allow bootstrapping the session via a short-lived signed token (used by the Ecwid
+  // storefront embed to avoid third-party cookie restrictions).
+  if (!req.session.registrantId && req.query.token) {
+    const account = verifyPortalToken(req.query.token);
+    if (account) {
+      req.session.registrantId = account.id;
+      // Redirect to /portal without the token in the URL (clean URL + prevents reuse)
+      return res.redirect("/portal");
+    }
+  }
+  if (!req.session.registrantId) return res.redirect("/portal/login");
+
   const account = db.prepare("SELECT * FROM registry_account WHERE id = ?").get(req.session.registrantId);
   if (!account) {
     req.session.destroy(() => res.redirect("/portal/login"));
@@ -1536,7 +1571,8 @@ app.get("/widget/portal.js", (req, res) => {
   var baseUrl = "${BASE_URL}";
   var _plId   = 'registry-portal-inline-wrap';
   var _frameId = 'registry-portal-iframe';
-  var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES','RESET_PASSWORD','SIGN_IN'];
+  // All Ecwid page types that constitute "the account section"
+  var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES','RESET_PASSWORD','SIGN_IN','ACCOUNT'];
 
   function _removePL(){
     var el = document.getElementById(_plId);
@@ -1545,15 +1581,20 @@ app.get("/widget/portal.js", (req, res) => {
 
   function _injectPortal(email){
     if (document.getElementById(_plId)) return;
+
+    // Exchange the customer email for a short-lived signed token.
+    // The token is passed as a URL param to the iframe so auth works even when
+    // the browser blocks third-party cookies (Safari ITP, Chrome Privacy Sandbox).
     fetch(baseUrl + '/portal/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ email: email })
+      // Note: no credentials:'include' — we don't need the cookie here because
+      // the token in the iframe URL bootstraps the session server-side.
     })
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(data){
-      if (!data || !data.ok) return; // no registry linked — stay silent
+      if (!data || !data.ok || !data.token) return; // no registry linked — stay silent
 
       var wrap = document.createElement('div');
       wrap.id = _plId;
@@ -1561,7 +1602,9 @@ app.get("/widget/portal.js", (req, res) => {
 
       var iframe = document.createElement('iframe');
       iframe.id = _frameId;
-      iframe.src = baseUrl + '/portal';
+      // The token in the URL lets the server establish the session inside the iframe
+      // as a first-party request — no cross-site cookie needed.
+      iframe.src = baseUrl + '/portal?token=' + encodeURIComponent(data.token);
       iframe.style.cssText = 'width:100%;min-height:400px;border:none;display:block;overflow:hidden;';
       iframe.scrolling = 'no';
       iframe.frameBorder = '0';
@@ -1587,7 +1630,7 @@ app.get("/widget/portal.js", (req, res) => {
     .catch(function(){});
   }
 
-  function _onPage(page){
+  function _checkPage(page){
     _removePL();
     if (!page || _acctPages.indexOf(page.type) === -1) return;
     if (!window.Ecwid || !Ecwid.Customer) return;
@@ -1597,20 +1640,25 @@ app.get("/widget/portal.js", (req, res) => {
   }
 
   function _init(){
-    if (window.Ecwid && Ecwid.OnPageLoad){
-      Ecwid.OnPageLoad.add(_onPage);
-    } else {
-      var _t = setInterval(function(){
-        if (window.Ecwid && Ecwid.OnPageLoad){ clearInterval(_t); Ecwid.OnPageLoad.add(_onPage); }
-      }, 300);
+    // Hook page navigation events
+    if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(_checkPage);
+    // Also fire for profile changes (customer signs in while on an account page)
+    if (window.Ecwid && Ecwid.OnSetProfile){
+      Ecwid.OnSetProfile.add(function(customer){
+        if (!customer || !customer.email) return;
+        // Re-check current page type
+        if (window.Ecwid && Ecwid.pages && Ecwid.pages.currentPage){
+          _checkPage(Ecwid.pages.currentPage);
+        }
+      });
     }
   }
 
   if (window.Ecwid && Ecwid.OnAPILoaded){
     Ecwid.OnAPILoaded.add(_init);
   } else {
-    var _t2 = setInterval(function(){
-      if (window.Ecwid && Ecwid.OnAPILoaded){ clearInterval(_t2); Ecwid.OnAPILoaded.add(_init); }
+    var _t = setInterval(function(){
+      if (window.Ecwid && Ecwid.OnAPILoaded){ clearInterval(_t); Ecwid.OnAPILoaded.add(_init); }
     }, 300);
   }
 })();
