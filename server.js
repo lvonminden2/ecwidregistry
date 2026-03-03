@@ -1340,21 +1340,13 @@ app.get("/widget/cart.js", (req, res) => {
     });
   }
 
-  var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER','ORDER_CONFIRMATION'];
+  // Pages where per-item badges are injected (banner shows on ALL pages via interval)
+  var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER',
+                    'ORDER_CONFIRMATION','MY_ORDERS','ORDER_DETAILS'];
   function onPage(page){
     restoreCtx();
-    // Remove stale banner before re-evaluating (SPA navigation may have changed page)
-    var prev = document.getElementById('_reg-ctx-banner');
-    if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
     if (page && _cartPages.indexOf(page.type) !== -1) {
-      // Show order-level banner (primary indicator)
-      try {
-        var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
-        if (ctx && ctx.id && (Date.now() - ctx.ts < 86400000)) {
-          showBanner(ctx.name || 'Gift Registry');
-        }
-      } catch(e){}
-      // Attempt per-item badge injection (secondary indicator)
+      // Attempt per-item badge injection
       setTimeout(labelItems, 600);
       if (window.MutationObserver){
         var obs = new MutationObserver(function(){ labelItems(); });
@@ -1387,22 +1379,42 @@ app.get("/widget/cart.js", (req, res) => {
   restoreCtx();
 
   // ── Immediate startup check ────────────────────────────────────────────────
-  // cart.js loads *after* Ecwid has already fired its initial OnPageLoad, so
-  // the onPage() handler above would miss the current page. Run an immediate
-  // check 500ms after load to catch this case.
+  // cart.js loads *after* Ecwid fires its initial OnPageLoad, so onPage() misses
+  // the current page. Show the banner 500ms after load to catch this case.
   setTimeout(function(){
     restoreCtx();
     try {
       var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
       if (ctx && ctx.id && (Date.now() - ctx.ts < 86400000)) {
-        console.log('[registry-cart] startup check — showing banner for:', ctx.name);
+        console.log('[registry-cart] startup — showing banner for:', ctx.name);
         showBanner(ctx.name || 'Gift Registry');
         setTimeout(labelItems, 600);
       } else {
-        console.log('[registry-cart] startup check — no active registry context');
+        console.log('[registry-cart] startup — no active registry context');
       }
     } catch(e){}
   }, 500);
+
+  // ── Banner keeper ─────────────────────────────────────────────────────────
+  // Re-inject the banner every 1.5s if it got removed by Ecwid's DOM re-renders
+  // during SPA navigation (checkout steps, order confirmation, order history).
+  // Also refreshes ec.order.extraFields on every tick so the registry name
+  // is always set before the order is submitted (→ appears in order email).
+  setInterval(function(){
+    try {
+      var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
+      if (!ctx || !ctx.id || (Date.now() - ctx.ts > 86400000)) {
+        var old = document.getElementById('_reg-ctx-banner');
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        return;
+      }
+      restoreCtx(); // keep ec.order.extraFields set for order email
+      if (!document.getElementById('_reg-ctx-banner')) {
+        console.log('[registry-cart] banner keeper — re-injecting for:', ctx.name);
+        showBanner(ctx.name || 'Gift Registry');
+      }
+    } catch(e){}
+  }, 1500);
 })();
 `);
 });
