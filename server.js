@@ -1021,7 +1021,10 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), (req, re
 
   if (!order) return res.status(400).send("Missing payload");
 
+  const orderNumber = Number(order.orderNumber || order.vendorOrderNumber || order.id || 0);
   const extraFields = order?.orderExtraFields || [];
+  console.log(`[webhook] order #${orderNumber} — extraFields: ${JSON.stringify(extraFields)}`);
+
   const registryIdField = extraFields.find(
     (f) =>
       f.fieldKey === "registry_id" ||
@@ -1029,27 +1032,55 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), (req, re
       f.id === "registry_id" ||
       f.name === "registry_id"
   );
-  const registryId = registryIdField ? Number(registryIdField.value || registryIdField.text || registryIdField.valueText) : null;
+  const registryId = registryIdField
+    ? Number(registryIdField.value || registryIdField.text || registryIdField.valueText)
+    : null;
 
-  if (registryId && Array.isArray(order.items)) {
-    for (const item of order.items) {
-      db.prepare(
-        "INSERT INTO registry_purchase (registry_id, product_id, product_name, product_sku, qty, buyer_name, buyer_email, notes, off_registry, channel, order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run(
-        registryId,
-        Number(item.productId),
-        item.name || null,
-        item.sku || null,
-        Number(item.quantity || 1),
-        order.billingPerson?.name || null,
-        order.email || null,
-        null,
-        0,
-        "online",
-        Number(order.orderNumber || order.id || null)
-      );
-    }
+  if (!registryId) {
+    console.log(`[webhook] order #${orderNumber} — no registry_id found, skipping`);
+    return res.status(200).send("ok");
   }
+
+  // Only record items that are actually on this registry (so non-registry items
+  // bought in the same order don't get mistakenly attributed to the registry)
+  const registryItemRows = db
+    .prepare("SELECT product_id FROM registry_item WHERE registry_id = ?")
+    .all(registryId);
+  const registryProductIds = new Set(registryItemRows.map((r) => r.product_id));
+
+  let recorded = 0;
+  for (const item of Array.isArray(order.items) ? order.items : []) {
+    const productId = Number(item.productId);
+    if (!registryProductIds.has(productId)) {
+      console.log(`[webhook] order #${orderNumber} — product ${productId} not in registry ${registryId}, skipping`);
+      continue;
+    }
+    // Deduplicate: skip if we already recorded this order + product
+    const dup = db
+      .prepare("SELECT id FROM registry_purchase WHERE order_id = ? AND product_id = ? AND registry_id = ?")
+      .get(orderNumber, productId, registryId);
+    if (dup) {
+      console.log(`[webhook] order #${orderNumber} — duplicate for product ${productId}, skipping`);
+      continue;
+    }
+    db.prepare(
+      "INSERT INTO registry_purchase (registry_id, product_id, product_name, product_sku, qty, buyer_name, buyer_email, notes, off_registry, channel, order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(
+      registryId,
+      productId,
+      item.name || null,
+      item.sku || null,
+      Number(item.quantity || 1),
+      order.billingPerson?.name || null,
+      order.email || null,
+      null,
+      0,
+      "online",
+      orderNumber || null
+    );
+    recorded++;
+  }
+  console.log(`[webhook] order #${orderNumber} — recorded ${recorded} registry purchase(s) for registry ${registryId}`);
 
   res.status(200).send("ok");
 });
@@ -1137,7 +1168,12 @@ app.get("/widget/registry.js", (req, res) => {
   }
 
   function applyRegistryExtraFields(id, name){
-    if (!window.ec || !ec.order || !ec.order.extraFields) return false;
+    // Initialize the Ecwid config object if it doesn't exist yet.
+    // This works even if called before Ecwid's own script loads.
+    window.ec = window.ec || {};
+    window.ec.order = window.ec.order || {};
+    window.ec.order.extraFields = window.ec.order.extraFields || {};
+    // registry_id: hidden from customer, read by our webhook to record the purchase
     ec.order.extraFields.registry_id = {
       title: 'Registry ID',
       type: 'text',
@@ -1145,11 +1181,13 @@ app.get("/widget/registry.js", (req, res) => {
       orderDetailsDisplaySection: 'hidden',
       value: String(id)
     };
+    // registry_name: shown on order confirmation + customer's My Orders so they
+    // can clearly see this is a gift registry purchase
     ec.order.extraFields.registry_name = {
-      title: 'Registry Name',
+      title: 'Gift Registry',
       type: 'text',
       required: false,
-      orderDetailsDisplaySection: 'hidden',
+      orderDetailsDisplaySection: 'order_comments',
       value: String(name || '')
     };
     if (window.Ecwid && Ecwid.refreshConfig) Ecwid.refreshConfig();

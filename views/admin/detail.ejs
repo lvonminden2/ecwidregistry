@@ -334,6 +334,9 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
           <div class="muted">SKU: <%= p.display_product_sku %></div>
         <% } %>
         <div class="muted"><%= p.buyer_name || 'Unknown buyer' %> · <%= p.buyer_email || '—' %></div>
+        <% if (p.order_id) { %>
+          <div class="muted">Ecwid order #<%= p.order_id %></div>
+        <% } %>
         <% if (p.notes) { %>
           <div class="muted">Notes: <%= p.notes %></div>
         <% } %>
