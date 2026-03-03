@@ -326,7 +326,10 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
   <% purchases.forEach(p => { %>
     <div class="row purchase-row">
       <div>
-        <div class="strong"><%= p.channel %> · <%= p.display_product_name || 'Registry item' %> · Qty <%= p.qty %></div>
+        <div class="strong">
+          <span class="channel-badge channel-<%= p.channel %>"><%= p.channel.replace('_', ' ') %></span>
+          <%= p.display_product_name || 'Registry item' %> · Qty <%= p.qty %>
+        </div>
         <% if (p.off_registry) { %>
           <div class="muted">Off-registry purchase (does not appear on public registry list).</div>
         <% } %>
@@ -335,7 +338,13 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
         <% } %>
         <div class="muted"><%= p.buyer_name || 'Unknown buyer' %> · <%= p.buyer_email || '—' %></div>
         <% if (p.order_id) { %>
-          <div class="muted">Ecwid order #<%= p.order_id %></div>
+          <div class="muted">
+            <% if (locals.ecwidStoreId) { %>
+              <a href="https://my.ecwid.com/store/<%= ecwidStoreId %>/orders#order-<%= p.order_id %>" target="_blank" rel="noopener noreferrer">Ecwid order #<%= p.order_id %></a>
+            <% } else { %>
+              Ecwid order #<%= p.order_id %>
+            <% } %>
+          </div>
         <% } %>
         <% if (p.notes) { %>
           <div class="muted">Notes: <%= p.notes %></div>

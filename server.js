@@ -449,7 +449,7 @@ app.get("/admin/registry/:id", async (req, res) => {
     .get(registryId) || null;
   const portalLoginUrl = `${BASE_URL}/portal/login`;
   const portalWidgetUrl = `${BASE_URL}/widget/portal.js`;
-  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl });
+  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, ecwidStoreId: ECWID_STORE_ID || '' });
 });
 
 app.post("/admin/registry/:id/edit", (req, res) => {
@@ -1181,13 +1181,13 @@ app.get("/widget/registry.js", (req, res) => {
       orderDetailsDisplaySection: 'hidden',
       value: String(id)
     };
-    // registry_name: shown on order confirmation + customer's My Orders so they
-    // can clearly see this is a gift registry purchase
+    // registry_name: shown in order payment info section so both the customer
+    // and store clerks can clearly see this is a gift registry purchase
     ec.order.extraFields.registry_name = {
       title: 'Gift Registry',
       type: 'text',
       required: false,
-      orderDetailsDisplaySection: 'order_comments',
+      orderDetailsDisplaySection: 'payment_info',
       value: String(name || '')
     };
     if (window.Ecwid && Ecwid.refreshConfig) Ecwid.refreshConfig();
@@ -1218,20 +1218,115 @@ app.get("/widget/registry.js", (req, res) => {
     } catch(e){}
   }
 
+  // Hook restoreRegistryContext into OnPageLoad so it re-runs on every
+  // in-app navigation (cart, checkout steps, etc.), not just the initial load
+  function _hookRestoreOnPageLoad(){
+    if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(restoreRegistryContext);
+  }
+
   // Hook into Ecwid's API loaded event so extra fields are set on every page
   if (window.Ecwid && Ecwid.OnAPILoaded) {
     Ecwid.OnAPILoaded.add(restoreRegistryContext);
+    Ecwid.OnAPILoaded.add(_hookRestoreOnPageLoad);
   } else {
     // Ecwid not yet loaded — wait for it then register
     var _regApiWait = setInterval(function(){
       if (window.Ecwid && Ecwid.OnAPILoaded) {
         clearInterval(_regApiWait);
         Ecwid.OnAPILoaded.add(restoreRegistryContext);
+        Ecwid.OnAPILoaded.add(_hookRestoreOnPageLoad);
         restoreRegistryContext();
+        _hookRestoreOnPageLoad();
       }
     }, 300);
   }
   restoreRegistryContext();
+
+  // ── Per-item "Gift Registry" badge in Ecwid cart / checkout ───────────────
+  // After each Ecwid page navigation, inject a small badge next to any cart
+  // item that was added from the registry widget.
+  (function(){
+    var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER','ORDER_CONFIRMATION'];
+
+    // Selectors to find a cart item's name/title element in Ecwid's DOM.
+    // Ecwid's class names are stable across their storefront versions.
+    var _nameSelectors = [
+      '.ec-cart-item__name',
+      '.ec-cart-item .ec-cart-item__title',
+      '[class*="cart-item"] [class*="title"]',
+      '[class*="cart-item"] [class*="name"]'
+    ];
+
+    function _labelItems(){
+      var rawItems = null;
+      var ctx = null;
+      try { rawItems = JSON.parse(localStorage.getItem('_reg_items') || 'null'); } catch(e){}
+      try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e){}
+      if (!rawItems || !Array.isArray(rawItems) || !rawItems.length) return;
+      if (!ctx || !ctx.id) return;
+      var regName = ctx.name || 'Gift Registry';
+
+      if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+      Ecwid.Cart.get(function(cart){
+        var cartItems = (cart && (cart.items || cart.products)) || [];
+        if (!Array.isArray(cartItems) || !cartItems.length) return;
+
+        // Build map: productId → item name (for DOM matching)
+        var regSet = new Set(rawItems.map(Number));
+        var regNames = {};
+        cartItems.forEach(function(it){
+          var pid = Number(it.productId || it.id || 0);
+          if (regSet.has(pid)) regNames[it.name] = true;
+        });
+        if (!Object.keys(regNames).length) return;
+
+        // Try each selector and inject badge next to matching items
+        _nameSelectors.forEach(function(sel){
+          document.querySelectorAll(sel).forEach(function(el){
+            if (el.getAttribute('data-reg-labeled')) return;
+            var text = (el.textContent || '').trim();
+            if (!text) return;
+            // Match if this element's text equals one of the registry item names
+            var matched = Object.keys(regNames).some(function(n){ return text === n || text.startsWith(n); });
+            if (!matched) return;
+            el.setAttribute('data-reg-labeled', '1');
+            var badge = document.createElement('span');
+            badge.className = 'reg-cart-badge';
+            badge.textContent = 'Gift Registry: ' + regName;
+            el.appendChild(badge);
+          });
+        });
+      });
+    }
+
+    // Re-run labeling on each cart/checkout page load
+    // Use a short delay to let Ecwid finish rendering its DOM
+    function _onPageForLabel(page){
+      if (!page || _cartPages.indexOf(page.type) === -1) return;
+      setTimeout(_labelItems, 600);
+      // Also observe for late DOM renders
+      if (window.MutationObserver){
+        var obs = new MutationObserver(function(){
+          _labelItems();
+        });
+        var storeEl = document.getElementById('ecwid-store') || document.body;
+        obs.observe(storeEl, { childList: true, subtree: true });
+        // Disconnect after 10s to avoid lingering observers
+        setTimeout(function(){ obs.disconnect(); }, 10000);
+      }
+    }
+
+    function _hookLabel(){
+      if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(_onPageForLabel);
+    }
+    if (window.Ecwid && Ecwid.OnAPILoaded) {
+      Ecwid.OnAPILoaded.add(_hookLabel);
+    } else {
+      var _labelWait = setInterval(function(){
+        if (window.Ecwid && Ecwid.OnAPILoaded){ clearInterval(_labelWait); Ecwid.OnAPILoaded.add(_hookLabel); }
+      }, 300);
+    }
+  })();
 
   // ── Registry portal inline in Ecwid account section ───────────────────────
   // When a logged-in customer visits their Ecwid account section, silently
@@ -1463,6 +1558,12 @@ app.get("/widget/registry.js", (req, res) => {
           ensureCartApi(effectiveStoreId)
             .then(function(){
               setRegistryExtraFields(registry);
+              // Track this productId as a registry item so the cart page can label it
+              try {
+                var ri = JSON.parse(localStorage.getItem('_reg_items') || '[]');
+                if (!ri.includes(productId)) ri.push(productId);
+                localStorage.setItem('_reg_items', JSON.stringify(ri));
+              } catch(e){}
               let settled = false;
               function finish(ok, message){
                 if (settled) return;
