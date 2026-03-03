@@ -1264,8 +1264,20 @@ app.get("/widget/cart.js", (req, res) => {
     if (document.getElementById('_reg-ctx-banner')) return;
     var banner = document.createElement('div');
     banner.id = '_reg-ctx-banner';
-    banner.innerHTML = '🎁 <strong>Gift Registry:</strong> ' + regName;
-    banner.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:5px;padding:10px 16px;margin:0 0 12px;font-size:0.9em;color:#2a6e3f;font-family:sans-serif;';
+    banner.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:5px;padding:10px 16px;margin:0 0 12px;font-size:0.9em;color:#2a6e3f;font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;gap:12px;';
+    var msg = document.createElement('span');
+    msg.innerHTML = '🎁 Shopping for registry <strong>' + regName + '</strong>';
+    var btn = document.createElement('button');
+    btn.textContent = 'Exit Registry';
+    btn.style.cssText = 'background:none;border:1px solid #2a6e3f;border-radius:3px;color:#2a6e3f;font-size:0.85em;padding:3px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;';
+    btn.onclick = function(){
+      localStorage.removeItem('_reg_ctx');
+      localStorage.removeItem('_reg_items');
+      var el = document.getElementById('_reg-ctx-banner');
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    };
+    banner.appendChild(msg);
+    banner.appendChild(btn);
     var storeEl = document.getElementById('ecwid-store') ||
       document.querySelector('[id^="my-store-"]') ||
       document.querySelector('.ecwid');
