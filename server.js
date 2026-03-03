@@ -1253,16 +1253,48 @@ app.get("/widget/cart.js", (req, res) => {
       var ctx = JSON.parse(raw);
       if (!ctx || !ctx.id) return;
       if (Date.now() - ctx.ts > 86400000) { localStorage.removeItem('_reg_ctx'); localStorage.removeItem('_reg_items'); return; }
+      console.log('[registry-cart] restored ctx:', ctx.name);
       applyExtraFields(ctx.id, ctx.name);
     } catch(e){}
   }
 
-  // ── Label registry items in Ecwid cart / checkout DOM ──
+  // ── Order-level registry banner (shown above the cart/checkout) ──
+  // This is the primary indicator — it doesn't depend on Ecwid's internal DOM.
+  function showBanner(regName) {
+    if (document.getElementById('_reg-ctx-banner')) return;
+    var banner = document.createElement('div');
+    banner.id = '_reg-ctx-banner';
+    banner.innerHTML = '🎁 <strong>Gift Registry:</strong> ' + regName;
+    banner.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:5px;padding:10px 16px;margin:0 0 12px;font-size:0.9em;color:#2a6e3f;font-family:sans-serif;';
+    var storeEl = document.getElementById('ecwid-store') ||
+      document.querySelector('[id^="my-store-"]') ||
+      document.querySelector('.ecwid');
+    if (storeEl && storeEl.parentNode) {
+      storeEl.parentNode.insertBefore(banner, storeEl);
+    } else {
+      // Fallback: try again after a short delay when DOM is ready
+      setTimeout(function(){
+        var el = document.getElementById('ecwid-store') ||
+          document.querySelector('[id^="my-store-"]') ||
+          document.querySelector('.ecwid');
+        if (el && el.parentNode && !document.getElementById('_reg-ctx-banner')) {
+          el.parentNode.insertBefore(banner, el);
+        }
+      }, 800);
+    }
+  }
+
+  // ── Per-item badge injection in Ecwid cart / checkout DOM ──
+  // Expanded selectors: Ecwid v6 data-hook attributes + class-based fallbacks.
   var _nameSelectors = [
+    '[data-hook="product-title"]',
+    '[data-hook="cart-item-title"]',
     '.ec-cart-item__name',
     '.ec-cart-item .ec-cart-item__title',
     '[class*="cart-item"] [class*="title"]',
-    '[class*="cart-item"] [class*="name"]'
+    '[class*="cart-item"] [class*="name"]',
+    '[class*="cartProduct"] [class*="title"]',
+    '[class*="cartProduct"] [class*="name"]'
   ];
 
   function labelItems(){
@@ -1275,14 +1307,19 @@ app.get("/widget/cart.js", (req, res) => {
 
     if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
     Ecwid.Cart.get(function(cart){
-      var cartItems = (cart && (cart.items || cart.products)) || [];
+      var cartItems = (cart && cart.items) || [];
+      console.log('[registry-cart] labelItems — reg_items:', rawItems, 'cart items:', cartItems.length);
       if (!Array.isArray(cartItems) || !cartItems.length) return;
       var regSet = new Set(rawItems.map(Number));
       var regNames = {};
+      // Ecwid Cart.get() returns: { items: [{ product: { id, name }, quantity }] }
       cartItems.forEach(function(it){
-        var pid = Number(it.productId || it.id || 0);
-        if (regSet.has(pid)) regNames[it.name] = true;
+        var product = (it && it.product) || it;
+        var pid = Number((product && product.id) || it.productId || 0);
+        var name = (product && product.name) || it.name || '';
+        if (regSet.has(pid) && name) regNames[name] = true;
       });
+      console.log('[registry-cart] registry item names to match:', Object.keys(regNames));
       if (!Object.keys(regNames).length) return;
       _nameSelectors.forEach(function(sel){
         document.querySelectorAll(sel).forEach(function(el){
@@ -1292,9 +1329,10 @@ app.get("/widget/cart.js", (req, res) => {
           var matched = Object.keys(regNames).some(function(n){ return text === n || text.startsWith(n); });
           if (!matched) return;
           el.setAttribute('data-reg-labeled', '1');
+          console.log('[registry-cart] labeled element for:', text);
           var badge = document.createElement('span');
           badge.className = 'reg-cart-badge';
-          badge.textContent = 'Gift Registry: ' + regName;
+          badge.textContent = '🎁 Gift Registry: ' + regName;
           badge.style.cssText = 'display:inline-block;margin-left:8px;padding:2px 7px;background:#f0f4f0;border:1px solid #c8d8c8;border-radius:3px;font-size:0.8em;color:#2a6e3f;font-weight:500;white-space:nowrap;';
           el.appendChild(badge);
         });
@@ -1306,6 +1344,14 @@ app.get("/widget/cart.js", (req, res) => {
   function onPage(page){
     restoreCtx();
     if (page && _cartPages.indexOf(page.type) !== -1) {
+      // Show order-level banner (primary indicator)
+      try {
+        var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
+        if (ctx && ctx.id && (Date.now() - ctx.ts < 86400000)) {
+          showBanner(ctx.name || 'Gift Registry');
+        }
+      } catch(e){}
+      // Attempt per-item badge injection (secondary indicator)
       setTimeout(labelItems, 600);
       if (window.MutationObserver){
         var obs = new MutationObserver(function(){ labelItems(); });
