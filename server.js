@@ -1343,6 +1343,9 @@ app.get("/widget/cart.js", (req, res) => {
   var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER','ORDER_CONFIRMATION'];
   function onPage(page){
     restoreCtx();
+    // Remove stale banner before re-evaluating (SPA navigation may have changed page)
+    var prev = document.getElementById('_reg-ctx-banner');
+    if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
     if (page && _cartPages.indexOf(page.type) !== -1) {
       // Show order-level banner (primary indicator)
       try {
@@ -1382,6 +1385,24 @@ app.get("/widget/cart.js", (req, res) => {
     }, 300);
   }
   restoreCtx();
+
+  // ── Immediate startup check ────────────────────────────────────────────────
+  // cart.js loads *after* Ecwid has already fired its initial OnPageLoad, so
+  // the onPage() handler above would miss the current page. Run an immediate
+  // check 500ms after load to catch this case.
+  setTimeout(function(){
+    restoreCtx();
+    try {
+      var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
+      if (ctx && ctx.id && (Date.now() - ctx.ts < 86400000)) {
+        console.log('[registry-cart] startup check — showing banner for:', ctx.name);
+        showBanner(ctx.name || 'Gift Registry');
+        setTimeout(labelItems, 600);
+      } else {
+        console.log('[registry-cart] startup check — no active registry context');
+      }
+    } catch(e){}
+  }, 500);
 })();
 `);
 });
