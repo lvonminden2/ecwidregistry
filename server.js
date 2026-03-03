@@ -397,7 +397,7 @@ app.get("/ecwid/iframe", (req, res) => {
 
   // Render admin directly (avoid redirect — some iframe hosts treat 302 as an error)
   const registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
-  return res.render("admin/index", { registries });
+  return res.render("admin/index", { registries, actionError: null, actionInfo: null });
 });
 
 // Admin routes
@@ -415,7 +415,9 @@ app.get("/admin", (req, res) => {
       .prepare("SELECT * FROM registry ORDER BY created_at DESC")
       .all();
   }
-  res.render("admin/index", { registries });
+  const actionError = req.query.error || null;
+  const actionInfo = req.query.info || null;
+  res.render("admin/index", { registries, actionError, actionInfo });
 });
 
 
@@ -1005,63 +1007,31 @@ app.get("/api/registries/:id", (req, res) => {
   res.json({ registry, items });
 });
 
-// Webhook placeholder for Ecwid order created
-app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (req, res) => {
-  // Verify Ecwid HMAC-SHA256 signature when client secret is configured
-  if (ECWID_CLIENT_SECRET) {
-    const sig = req.headers["x-ecwid-signature-sha256"] || "";
-    const expected = crypto
-      .createHmac("sha256", ECWID_CLIENT_SECRET)
-      .update(req.body)
-      .digest("base64");
-    if (sig !== expected) {
-      console.log("[webhook] signature mismatch — rejected");
-      return res.status(401).send("Invalid signature");
-    }
-  }
-
-  let order;
-  try {
-    order = JSON.parse(req.body.toString("utf8"));
-  } catch {
-    return res.status(400).send("Invalid JSON");
-  }
-
-  if (!order) return res.status(400).send("Missing payload");
-
+// ─── Process a full Ecwid order: match items to registries, record purchases,
+// and annotate the Ecwid order with staff notes. Used by both the webhook and
+// the manual sync endpoint.
+async function processEcwidOrder(order) {
   const orderNumber = Number(order.orderNumber || order.vendorOrderNumber || order.id || 0);
-  const extraFields = order?.orderExtraFields || [];
-  console.log(`[webhook] order #${orderNumber} — extraFields: ${JSON.stringify(extraFields)}`);
+  if (!orderNumber) return { recorded: 0, error: "no order number" };
 
-  // Try to get registry_id from extraFields (best case: widget was on checkout page)
+  const extraFields = order?.orderExtraFields || [];
   const registryIdField = extraFields.find(
-    (f) =>
-      f.fieldKey === "registry_id" ||
-      f.key === "registry_id" ||
-      f.id === "registry_id" ||
-      f.name === "registry_id"
+    (f) => f.key === "registry_id" || f.fieldKey === "registry_id" || f.id === "registry_id" || f.name === "registry_id"
   );
   const hintRegistryId = registryIdField
     ? Number(registryIdField.value || registryIdField.text || registryIdField.valueText)
     : null;
 
   const orderItems = Array.isArray(order.items) ? order.items : [];
-  if (!orderItems.length) {
-    console.log(`[webhook] order #${orderNumber} — no items in order`);
-    return res.status(200).send("ok");
-  }
+  if (!orderItems.length) return { recorded: 0, error: "no items" };
 
-  // Build a lookup: for every product_id in the order, find which active
-  // registries include it.  If we got a registry_id hint from extraFields,
-  // only look at that registry; otherwise scan all active registries.
   let recorded = 0;
-  const matchedRegistries = new Set(); // track which registries were matched (for Ecwid annotation)
+  const matchedRegistries = new Set();
 
   for (const item of orderItems) {
     const productId = Number(item.productId);
     if (!productId) continue;
 
-    // Find registries that contain this product
     const matchQuery = hintRegistryId
       ? "SELECT ri.registry_id FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND ri.registry_id = ? AND r.status = 'active'"
       : "SELECT ri.registry_id FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND r.status = 'active'";
@@ -1070,35 +1040,25 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (r
 
     for (const match of matches) {
       const registryId = match.registry_id;
-      // Deduplicate: skip if we already recorded this order + product + registry
       const dup = db
         .prepare("SELECT id FROM registry_purchase WHERE order_id = ? AND product_id = ? AND registry_id = ?")
         .get(orderNumber, productId, registryId);
-      if (dup) {
-        console.log(`[webhook] order #${orderNumber} — duplicate for product ${productId} registry ${registryId}, skipping`);
-        continue;
-      }
+      if (dup) continue;
+
       db.prepare(
         "INSERT INTO registry_purchase (registry_id, product_id, product_name, product_sku, qty, buyer_name, buyer_email, notes, off_registry, channel, order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(
-        registryId,
-        productId,
-        item.name || null,
-        item.sku || null,
+        registryId, productId,
+        item.name || null, item.sku || null,
         Number(item.quantity || 1),
-        order.billingPerson?.name || null,
+        order.billingPerson?.name || order.shippingPerson?.name || null,
         order.email || null,
-        null,
-        0,
-        "online",
-        orderNumber || null
+        null, 0, "online", orderNumber
       );
       recorded++;
       matchedRegistries.add(registryId);
     }
   }
-
-  console.log(`[webhook] order #${orderNumber} — recorded ${recorded} registry purchase(s)`);
 
   // Annotate the Ecwid order with staff notes so clerks see registry info
   if (matchedRegistries.size > 0 && ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
@@ -1110,22 +1070,112 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (r
       }
       const note = `GIFT REGISTRY ORDER — ${regNames.join(", ")}`;
       const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderNumber}`;
-      const updateRes = await fetch(url, {
+      await fetch(url, {
         method: "PUT",
         headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}`, "Content-Type": "application/json" },
         body: JSON.stringify({ privateAdminNotes: note })
       });
-      if (updateRes.ok) {
-        console.log(`[webhook] order #${orderNumber} — annotated Ecwid order: ${note}`);
-      } else {
-        console.log(`[webhook] order #${orderNumber} — Ecwid order annotation failed: ${updateRes.status}`);
-      }
+      console.log(`[order] #${orderNumber} — annotated: ${note}`);
     } catch (err) {
-      console.log(`[webhook] order #${orderNumber} — Ecwid annotation error: ${err.message}`);
+      console.log(`[order] #${orderNumber} — annotation error: ${err.message}`);
     }
   }
 
+  return { recorded, registries: [...matchedRegistries] };
+}
+
+// Fetch full order details from Ecwid REST API
+async function fetchEcwidOrder(orderId) {
+  if (!ECWID_ACCESS_TOKEN || !ECWID_STORE_ID || ECWID_STORE_ID === "STORE_ID_PLACEHOLDER") {
+    return null;
+  }
+  const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderId}`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
+    if (!res.ok) {
+      console.log(`[ecwid-api] fetch order ${orderId} failed: ${res.status}`);
+      return null;
+    }
+    return await res.json();
+  } catch (err) {
+    console.log(`[ecwid-api] fetch order ${orderId} error: ${err.message}`);
+    return null;
+  }
+}
+
+// Ecwid webhook: receives a NOTIFICATION (not the full order), then fetches
+// the full order from the REST API and processes it.
+app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (req, res) => {
+  // Respond immediately — Ecwid requires a fast 200 or it retries
   res.status(200).send("ok");
+
+  // Verify HMAC signature when client secret is configured
+  if (ECWID_CLIENT_SECRET) {
+    const sig = req.headers["x-ecwid-signature-sha256"] || "";
+    const expected = crypto
+      .createHmac("sha256", ECWID_CLIENT_SECRET)
+      .update(req.body)
+      .digest("base64");
+    if (sig !== expected) {
+      console.log("[webhook] signature mismatch — ignored");
+      return;
+    }
+  }
+
+  let event;
+  try {
+    event = JSON.parse(req.body.toString("utf8"));
+  } catch {
+    console.log("[webhook] invalid JSON body");
+    return;
+  }
+
+  console.log(`[webhook] received event: ${JSON.stringify(event)}`);
+
+  // Ecwid sends: { eventType, storeId, entityId, data: { orderId, newPaymentStatus, ... } }
+  const orderId = event?.data?.orderId || event?.entityId || event?.orderNumber || event?.id;
+  if (!orderId) {
+    console.log("[webhook] no orderId found in event");
+    return;
+  }
+
+  console.log(`[webhook] fetching full order ${orderId} from Ecwid API...`);
+  const order = await fetchEcwidOrder(orderId);
+  if (!order) {
+    console.log(`[webhook] could not fetch order ${orderId}`);
+    return;
+  }
+
+  const result = await processEcwidOrder(order);
+  console.log(`[webhook] order #${orderId} — recorded ${result.recorded} registry purchase(s)`);
+});
+
+// ─── Manual sync: fetch recent orders from Ecwid and process any that contain
+// registry items. Use this to backfill orders placed before the webhook was fixed.
+app.post("/admin/sync-orders", async (req, res) => {
+  if (!ECWID_ACCESS_TOKEN || !ECWID_STORE_ID || ECWID_STORE_ID === "STORE_ID_PLACEHOLDER") {
+    return res.redirect("/admin?error=" + encodeURIComponent("Ecwid API credentials not configured."));
+  }
+  try {
+    const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders?limit=50&sortBy=DATE_CREATED&sortDirection=DESC`;
+    const apiRes = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
+    if (!apiRes.ok) {
+      return res.redirect("/admin?error=" + encodeURIComponent(`Ecwid API error: ${apiRes.status}`));
+    }
+    const data = await apiRes.json();
+    const orders = data?.items || [];
+    let totalRecorded = 0;
+    for (const order of orders) {
+      const result = await processEcwidOrder(order);
+      totalRecorded += result.recorded;
+    }
+    const msg = `Synced ${orders.length} orders — recorded ${totalRecorded} new registry purchase(s).`;
+    console.log(`[sync] ${msg}`);
+    return res.redirect("/admin?info=" + encodeURIComponent(msg));
+  } catch (err) {
+    console.log(`[sync] error: ${err.message}`);
+    return res.redirect("/admin?error=" + encodeURIComponent(`Sync failed: ${err.message}`));
+  }
 });
 
 // ─── Lightweight storefront cart script ──────────────────────────────────────

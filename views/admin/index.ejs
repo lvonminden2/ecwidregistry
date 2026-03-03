@@ -8,11 +8,25 @@
   </div>
 </div>
 
-<% if (ecwid && ecwid.store_id) { %>
-  <div class="card">
-    <div class="muted">Connected store: <span class="strong"><%= ecwid.store_id %></span></div>
-  </div>
+<% if (locals.actionError) { %>
+  <div class="card"><div class="reg-error"><%= actionError %></div></div>
 <% } %>
+<% if (locals.actionInfo) { %>
+  <div class="card"><div class="muted"><%= actionInfo %></div></div>
+<% } %>
+
+<div class="card">
+  <div class="muted" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+    <% if (ecwid && ecwid.store_id) { %>
+      <span>Connected store: <span class="strong"><%= ecwid.store_id %></span></span>
+    <% } else { %>
+      <span>&nbsp;</span>
+    <% } %>
+    <form method="post" action="/admin/sync-orders" style="margin:0;">
+      <button class="btn secondary" type="submit">Sync Online Orders</button>
+    </form>
+  </div>
+</div>
 
 <div class="card">
   <% if (registries.length === 0) { %>
