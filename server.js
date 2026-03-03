@@ -28,8 +28,16 @@ const app = express();
 app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-app.use(express.urlencoded({ extended: true, limit: "12mb" }));
-app.use(express.json({ limit: "12mb" }));
+// Skip global body parsers for webhook routes — they need express.raw() for
+// HMAC signature verification on the original bytes.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/webhooks/")) return next();
+  express.urlencoded({ extended: true, limit: "12mb" })(req, res, next);
+});
+app.use((req, res, next) => {
+  if (req.path.startsWith("/webhooks/")) return next();
+  express.json({ limit: "12mb" })(req, res, next);
+});
 app.use((req, res, next) => {
   if (req.path.startsWith("/api/") || req.path === "/widget/registry.js" || req.path === "/widget/portal.js") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -998,7 +1006,7 @@ app.get("/api/registries/:id", (req, res) => {
 });
 
 // Webhook placeholder for Ecwid order created
-app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), (req, res) => {
+app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (req, res) => {
   // Verify Ecwid HMAC-SHA256 signature when client secret is configured
   if (ECWID_CLIENT_SECRET) {
     const sig = req.headers["x-ecwid-signature-sha256"] || "";
@@ -1025,6 +1033,7 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), (req, re
   const extraFields = order?.orderExtraFields || [];
   console.log(`[webhook] order #${orderNumber} — extraFields: ${JSON.stringify(extraFields)}`);
 
+  // Try to get registry_id from extraFields (best case: widget was on checkout page)
   const registryIdField = extraFields.find(
     (f) =>
       f.fieldKey === "registry_id" ||
@@ -1032,57 +1041,211 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), (req, re
       f.id === "registry_id" ||
       f.name === "registry_id"
   );
-  const registryId = registryIdField
+  const hintRegistryId = registryIdField
     ? Number(registryIdField.value || registryIdField.text || registryIdField.valueText)
     : null;
 
-  if (!registryId) {
-    console.log(`[webhook] order #${orderNumber} — no registry_id found, skipping`);
+  const orderItems = Array.isArray(order.items) ? order.items : [];
+  if (!orderItems.length) {
+    console.log(`[webhook] order #${orderNumber} — no items in order`);
     return res.status(200).send("ok");
   }
 
-  // Only record items that are actually on this registry (so non-registry items
-  // bought in the same order don't get mistakenly attributed to the registry)
-  const registryItemRows = db
-    .prepare("SELECT product_id FROM registry_item WHERE registry_id = ?")
-    .all(registryId);
-  const registryProductIds = new Set(registryItemRows.map((r) => r.product_id));
-
+  // Build a lookup: for every product_id in the order, find which active
+  // registries include it.  If we got a registry_id hint from extraFields,
+  // only look at that registry; otherwise scan all active registries.
   let recorded = 0;
-  for (const item of Array.isArray(order.items) ? order.items : []) {
+  const matchedRegistries = new Set(); // track which registries were matched (for Ecwid annotation)
+
+  for (const item of orderItems) {
     const productId = Number(item.productId);
-    if (!registryProductIds.has(productId)) {
-      console.log(`[webhook] order #${orderNumber} — product ${productId} not in registry ${registryId}, skipping`);
-      continue;
+    if (!productId) continue;
+
+    // Find registries that contain this product
+    const matchQuery = hintRegistryId
+      ? "SELECT ri.registry_id FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND ri.registry_id = ? AND r.status = 'active'"
+      : "SELECT ri.registry_id FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND r.status = 'active'";
+    const matchParams = hintRegistryId ? [productId, hintRegistryId] : [productId];
+    const matches = db.prepare(matchQuery).all(...matchParams);
+
+    for (const match of matches) {
+      const registryId = match.registry_id;
+      // Deduplicate: skip if we already recorded this order + product + registry
+      const dup = db
+        .prepare("SELECT id FROM registry_purchase WHERE order_id = ? AND product_id = ? AND registry_id = ?")
+        .get(orderNumber, productId, registryId);
+      if (dup) {
+        console.log(`[webhook] order #${orderNumber} — duplicate for product ${productId} registry ${registryId}, skipping`);
+        continue;
+      }
+      db.prepare(
+        "INSERT INTO registry_purchase (registry_id, product_id, product_name, product_sku, qty, buyer_name, buyer_email, notes, off_registry, channel, order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(
+        registryId,
+        productId,
+        item.name || null,
+        item.sku || null,
+        Number(item.quantity || 1),
+        order.billingPerson?.name || null,
+        order.email || null,
+        null,
+        0,
+        "online",
+        orderNumber || null
+      );
+      recorded++;
+      matchedRegistries.add(registryId);
     }
-    // Deduplicate: skip if we already recorded this order + product
-    const dup = db
-      .prepare("SELECT id FROM registry_purchase WHERE order_id = ? AND product_id = ? AND registry_id = ?")
-      .get(orderNumber, productId, registryId);
-    if (dup) {
-      console.log(`[webhook] order #${orderNumber} — duplicate for product ${productId}, skipping`);
-      continue;
-    }
-    db.prepare(
-      "INSERT INTO registry_purchase (registry_id, product_id, product_name, product_sku, qty, buyer_name, buyer_email, notes, off_registry, channel, order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(
-      registryId,
-      productId,
-      item.name || null,
-      item.sku || null,
-      Number(item.quantity || 1),
-      order.billingPerson?.name || null,
-      order.email || null,
-      null,
-      0,
-      "online",
-      orderNumber || null
-    );
-    recorded++;
   }
-  console.log(`[webhook] order #${orderNumber} — recorded ${recorded} registry purchase(s) for registry ${registryId}`);
+
+  console.log(`[webhook] order #${orderNumber} — recorded ${recorded} registry purchase(s)`);
+
+  // Annotate the Ecwid order with staff notes so clerks see registry info
+  if (matchedRegistries.size > 0 && ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
+    try {
+      const regNames = [];
+      for (const rid of matchedRegistries) {
+        const reg = db.prepare("SELECT display_name FROM registry WHERE id = ?").get(rid);
+        if (reg) regNames.push(reg.display_name);
+      }
+      const note = `GIFT REGISTRY ORDER — ${regNames.join(", ")}`;
+      const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderNumber}`;
+      const updateRes = await fetch(url, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ privateAdminNotes: note })
+      });
+      if (updateRes.ok) {
+        console.log(`[webhook] order #${orderNumber} — annotated Ecwid order: ${note}`);
+      } else {
+        console.log(`[webhook] order #${orderNumber} — Ecwid order annotation failed: ${updateRes.status}`);
+      }
+    } catch (err) {
+      console.log(`[webhook] order #${orderNumber} — Ecwid annotation error: ${err.message}`);
+    }
+  }
 
   res.status(200).send("ok");
+});
+
+// ─── Lightweight storefront cart script ──────────────────────────────────────
+// Add this script to the Ecwid storefront page (separate from the registry page)
+// to restore registry context during checkout and label cart items.
+// Usage: <script src="https://your-app/widget/cart.js"></script>
+app.get("/widget/cart.js", (req, res) => {
+  res.type("application/javascript");
+  res.send(`
+(function(){
+  var baseUrl = "${BASE_URL}";
+
+  // ── Restore ec.order.extraFields from localStorage ──
+  function applyExtraFields(id, name){
+    window.ec = window.ec || {};
+    window.ec.order = window.ec.order || {};
+    window.ec.order.extraFields = window.ec.order.extraFields || {};
+    ec.order.extraFields.registry_id = {
+      title: 'Registry ID', type: 'text', required: false,
+      orderDetailsDisplaySection: 'hidden', value: String(id)
+    };
+    ec.order.extraFields.registry_name = {
+      title: 'Gift Registry', type: 'text', required: false,
+      orderDetailsDisplaySection: 'payment_info', value: String(name || '')
+    };
+    if (window.Ecwid && Ecwid.refreshConfig) Ecwid.refreshConfig();
+  }
+
+  function restoreCtx(){
+    try {
+      var raw = localStorage.getItem('_reg_ctx');
+      if (!raw) return;
+      var ctx = JSON.parse(raw);
+      if (!ctx || !ctx.id) return;
+      if (Date.now() - ctx.ts > 86400000) { localStorage.removeItem('_reg_ctx'); localStorage.removeItem('_reg_items'); return; }
+      applyExtraFields(ctx.id, ctx.name);
+    } catch(e){}
+  }
+
+  // ── Label registry items in Ecwid cart / checkout DOM ──
+  var _nameSelectors = [
+    '.ec-cart-item__name',
+    '.ec-cart-item .ec-cart-item__title',
+    '[class*="cart-item"] [class*="title"]',
+    '[class*="cart-item"] [class*="name"]'
+  ];
+
+  function labelItems(){
+    var rawItems, ctx;
+    try { rawItems = JSON.parse(localStorage.getItem('_reg_items') || 'null'); } catch(e){}
+    try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e){}
+    if (!rawItems || !Array.isArray(rawItems) || !rawItems.length) return;
+    if (!ctx || !ctx.id) return;
+    var regName = ctx.name || 'Gift Registry';
+
+    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+    Ecwid.Cart.get(function(cart){
+      var cartItems = (cart && (cart.items || cart.products)) || [];
+      if (!Array.isArray(cartItems) || !cartItems.length) return;
+      var regSet = new Set(rawItems.map(Number));
+      var regNames = {};
+      cartItems.forEach(function(it){
+        var pid = Number(it.productId || it.id || 0);
+        if (regSet.has(pid)) regNames[it.name] = true;
+      });
+      if (!Object.keys(regNames).length) return;
+      _nameSelectors.forEach(function(sel){
+        document.querySelectorAll(sel).forEach(function(el){
+          if (el.getAttribute('data-reg-labeled')) return;
+          var text = (el.textContent || '').trim();
+          if (!text) return;
+          var matched = Object.keys(regNames).some(function(n){ return text === n || text.startsWith(n); });
+          if (!matched) return;
+          el.setAttribute('data-reg-labeled', '1');
+          var badge = document.createElement('span');
+          badge.className = 'reg-cart-badge';
+          badge.textContent = 'Gift Registry: ' + regName;
+          badge.style.cssText = 'display:inline-block;margin-left:8px;padding:2px 7px;background:#f0f4f0;border:1px solid #c8d8c8;border-radius:3px;font-size:0.8em;color:#2a6e3f;font-weight:500;white-space:nowrap;';
+          el.appendChild(badge);
+        });
+      });
+    });
+  }
+
+  var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER','ORDER_CONFIRMATION'];
+  function onPage(page){
+    restoreCtx();
+    if (page && _cartPages.indexOf(page.type) !== -1) {
+      setTimeout(labelItems, 600);
+      if (window.MutationObserver){
+        var obs = new MutationObserver(function(){ labelItems(); });
+        var el = document.getElementById('ecwid-store') || document.body;
+        obs.observe(el, { childList: true, subtree: true });
+        setTimeout(function(){ obs.disconnect(); }, 10000);
+      }
+    }
+  }
+
+  function hookAll(){
+    if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(onPage);
+  }
+
+  // Hook in — handle both "Ecwid already loaded" and "not yet loaded"
+  if (window.Ecwid && Ecwid.OnAPILoaded) {
+    Ecwid.OnAPILoaded.add(hookAll);
+    Ecwid.OnAPILoaded.add(restoreCtx);
+  } else {
+    var _w = setInterval(function(){
+      if (window.Ecwid && Ecwid.OnAPILoaded){
+        clearInterval(_w);
+        Ecwid.OnAPILoaded.add(hookAll);
+        Ecwid.OnAPILoaded.add(restoreCtx);
+        restoreCtx();
+        hookAll();
+      }
+    }, 300);
+  }
+  restoreCtx();
+})();
+`);
 });
 
 // Storefront widget JS
