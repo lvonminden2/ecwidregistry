@@ -1027,6 +1027,7 @@ async function processEcwidOrder(order) {
 
   let recorded = 0;
   const matchedRegistries = new Set();
+  const matchedProductIds = new Set();
 
   for (const item of orderItems) {
     const productId = Number(item.productId);
@@ -1039,6 +1040,7 @@ async function processEcwidOrder(order) {
     const matches = db.prepare(matchQuery).all(...matchParams);
 
     for (const match of matches) {
+      matchedProductIds.add(productId);
       const registryId = match.registry_id;
       const dup = db
         .prepare("SELECT id FROM registry_purchase WHERE order_id = ? AND product_id = ? AND registry_id = ?")
@@ -1060,7 +1062,7 @@ async function processEcwidOrder(order) {
     }
   }
 
-  // Annotate the Ecwid order with staff notes so clerks see registry info
+  // Annotate the Ecwid order with per-item and order-level notes
   if (matchedRegistries.size > 0 && ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
     try {
       const regNames = [];
@@ -1068,14 +1070,30 @@ async function processEcwidOrder(order) {
         const reg = db.prepare("SELECT display_name FROM registry WHERE id = ?").get(rid);
         if (reg) regNames.push(reg.display_name);
       }
-      const note = `GIFT REGISTRY ORDER — ${regNames.join(", ")}`;
+
+      // Build detailed privateAdminNotes listing which items are registry gifts
+      const giftItemNames = orderItems
+        .filter(it => matchedProductIds.has(Number(it.productId)))
+        .map(it => it.name || it.sku || `#${it.productId}`);
+      const note = `GIFT REGISTRY ORDER — ${regNames.join(", ")}\nRegistry items: ${giftItemNames.join(", ")}`;
+
+      // Update per-item notes so clerks see which items are gifts
+      const updatedItems = orderItems.map(it => {
+        const pid = Number(it.productId);
+        if (matchedProductIds.has(pid)) {
+          const regLabel = "Gift Registry: " + regNames.join(", ");
+          return { ...it, note: it.note ? it.note + " | " + regLabel : regLabel };
+        }
+        return it;
+      });
+
       const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderNumber}`;
       await fetch(url, {
         method: "PUT",
         headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ privateAdminNotes: note })
+        body: JSON.stringify({ privateAdminNotes: note, items: updatedItems })
       });
-      console.log(`[order] #${orderNumber} — annotated: ${note}`);
+      console.log(`[order] #${orderNumber} — annotated ${giftItemNames.length} registry item(s): ${giftItemNames.join(", ")}`);
     } catch (err) {
       console.log(`[order] #${orderNumber} — annotation error: ${err.message}`);
     }
@@ -1177,6 +1195,30 @@ app.post("/admin/sync-orders", async (req, res) => {
     return res.redirect("/admin?error=" + encodeURIComponent(`Sync failed: ${err.message}`));
   }
 });
+
+// ─── Auto-sync: poll Ecwid for recent orders every 15 minutes ────────────────
+if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
+  const AUTO_SYNC_INTERVAL = 15 * 60 * 1000; // 15 minutes
+  setInterval(async () => {
+    try {
+      const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders?createdFrom=${encodeURIComponent(since)}&limit=50&sortBy=DATE_CREATED&sortDirection=DESC`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const orders = data?.items || [];
+      let recorded = 0;
+      for (const order of orders) {
+        const result = await processEcwidOrder(order);
+        recorded += result.recorded;
+      }
+      if (recorded > 0) console.log(`[auto-sync] recorded ${recorded} new registry purchase(s)`);
+    } catch (err) {
+      console.log(`[auto-sync] error: ${err.message}`);
+    }
+  }, AUTO_SYNC_INTERVAL);
+  console.log("[auto-sync] enabled — polling every 15 minutes");
+}
 
 // ─── Lightweight storefront cart script ──────────────────────────────────────
 // Add this script to the Ecwid storefront page (separate from the registry page)
