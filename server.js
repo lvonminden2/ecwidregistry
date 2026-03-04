@@ -1228,8 +1228,11 @@ if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHO
 // Usage: <script src="https://your-app/widget/cart.js"></script>
 app.get("/widget/cart.js", (req, res) => {
   res.type("application/javascript");
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.set("Pragma", "no-cache");
   res.send(`
 (function(){
+  console.log('[registry-cart] v4 loaded');
   var baseUrl = "${BASE_URL}";
   var registryPageUrl = "${REGISTRY_PAGE_URL}";
 
@@ -1324,6 +1327,7 @@ app.get("/widget/cart.js", (req, res) => {
   // ── Green banner: active registry mode, cart is clean ──
   function showBanner(regName) {
     if (document.getElementById('_reg-ctx-banner')) return;
+    console.log('[registry-cart] showBanner called for:', regName);
     var banner = document.createElement('div');
     banner.id = '_reg-ctx-banner';
     banner.setAttribute('data-state', 'ok');
@@ -1371,16 +1375,25 @@ app.get("/widget/cart.js", (req, res) => {
     banner.appendChild(btn);
     var storeEl = document.getElementById('ecwid-store') ||
       document.querySelector('[id^="my-store-"]') ||
-      document.querySelector('.ecwid');
+      document.querySelector('.ecwid') ||
+      document.querySelector('.registry-root') ||
+      document.getElementById('registry-app');
     if (storeEl && storeEl.parentNode) {
       storeEl.parentNode.insertBefore(banner, storeEl);
+      console.log('[registry-cart] banner inserted before:', storeEl.id || storeEl.className);
     } else {
+      console.log('[registry-cart] no store/registry element found — retrying in 800ms');
       setTimeout(function(){
         var el = document.getElementById('ecwid-store') ||
           document.querySelector('[id^="my-store-"]') ||
-          document.querySelector('.ecwid');
+          document.querySelector('.ecwid') ||
+          document.querySelector('.registry-root') ||
+          document.getElementById('registry-app');
         if (el && el.parentNode && !document.getElementById('_reg-ctx-banner')) {
           el.parentNode.insertBefore(banner, el);
+          console.log('[registry-cart] banner inserted (retry) before:', el.id || el.className);
+        } else {
+          console.log('[registry-cart] banner insertion failed — no suitable DOM element');
         }
       }, 800);
     }
@@ -1455,7 +1468,8 @@ app.get("/widget/cart.js", (req, res) => {
     banner.appendChild(btnRow);
 
     var storeEl = document.getElementById('ecwid-store') ||
-      document.querySelector('[id^="my-store-"]') || document.querySelector('.ecwid');
+      document.querySelector('[id^="my-store-"]') || document.querySelector('.ecwid') ||
+      document.querySelector('.registry-root') || document.getElementById('registry-app');
     if (storeEl && storeEl.parentNode) storeEl.parentNode.insertBefore(banner, storeEl);
   }
 
@@ -1497,7 +1511,8 @@ app.get("/widget/cart.js", (req, res) => {
       el.innerHTML = '🎁 Shopping for a gift registry? Visit the registry page to browse and add items.';
     }
     var storeEl = document.getElementById('ecwid-store') ||
-      document.querySelector('[id^="my-store-"]') || document.querySelector('.ecwid');
+      document.querySelector('[id^="my-store-"]') || document.querySelector('.ecwid') ||
+      document.querySelector('.registry-root') || document.getElementById('registry-app');
     if (storeEl && storeEl.parentNode) storeEl.parentNode.insertBefore(el, storeEl);
   }
 
@@ -1646,6 +1661,11 @@ app.get("/widget/cart.js", (req, res) => {
       var onCartPage = _cartPages.indexOf(_currentPageType) !== -1;
       var onCheckoutPage = _cartCheckPages.indexOf(_currentPageType) !== -1;
 
+      // Diagnostic log every 10th tick (~15s)
+      if (_tickCount % 10 === 1) {
+        console.log('[registry-cart] tick', _tickCount, '| ctx:', ctx ? (ctx.name + ' mode:' + (ctx.mode||false)) : 'null', '| page:', _currentPageType || 'unknown', '| banner:', !!document.getElementById('_reg-ctx-banner'));
+      }
+
       if (!ctx || !ctx.id || (Date.now() - ctx.ts > 86400000)) {
         // State 1: no registry context
         var old = document.getElementById('_reg-ctx-banner');
@@ -1765,8 +1785,11 @@ app.get("/widget/cart.js", (req, res) => {
 // Storefront widget JS
 app.get("/widget/registry.js", (req, res) => {
   res.type("application/javascript");
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.set("Pragma", "no-cache");
   res.send(`
 (function(){
+  console.log('[registry-widget] v4 loaded');
   const baseUrl = "${BASE_URL}";
   const defaultStoreId = "${ECWID_STORE_ID}";
 
@@ -2371,15 +2394,18 @@ app.get("/widget/registry.js", (req, res) => {
             ts: Date.now()
           }));
           applyRegistryExtraFields(registry.id, registry.display_name);
+          console.log('[registry-widget] auto-set _reg_ctx for:', registry.display_name, '(no prior context)');
         } else if (String(_existCtx.id) === String(registry.id)) {
           // Same registry — refresh ts, preserve any existing mode flag
           _existCtx.ts = Date.now();
           _existCtx.name = registry.display_name;
           localStorage.setItem('_reg_ctx', JSON.stringify(_existCtx));
           applyRegistryExtraFields(registry.id, registry.display_name);
+          console.log('[registry-widget] refreshed _reg_ctx for:', registry.display_name, 'mode:', _existCtx.mode || false);
+        } else {
+          console.log('[registry-widget] different registry active:', _existCtx.name, '— not overriding');
         }
-        // Different registry — leave alone; mode bar handles the switch UI
-      } catch(e) {}
+      } catch(e) { console.warn('[registry-widget] auto-set error:', e); }
       function setStatus(message, isError){
         const node = container.querySelector('.reg-status');
         if (!node) return;
