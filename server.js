@@ -1584,76 +1584,11 @@ app.get("/widget/cart.js", (req, res) => {
     } catch(e) { return null; }
   }
 
-  // ── Validate items added to cart while in shopping mode ──
-  // Registry items are tagged in _reg_items; non-registry items trigger a prompt.
+  // ── Shopping mode enforcement is handled by the interval below ──
+  // Ecwid.OnCartChanged is not reliably available across all storefront versions,
+  // so we poll the cart every few ticks instead (see the three-state interval).
   function hookCartChanged() {
-    if (!window.Ecwid || !Ecwid.OnCartChanged) return;
-    var _promptedPids = new Set(); // pids already warned about this session
-    Ecwid.OnCartChanged.add(function(cart) {
-      try {
-        var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
-        if (!ctx || !ctx.id || !ctx.mode || (Date.now() - ctx.ts > 86400000)) return;
-
-        var allRegPids = getAllRegPids(); // null if full list not available
-        var regSet = getRegSet();
-        var ctxId = Number(ctx.id);
-        var ctxName = ctx.name || 'this registry';
-
-        var nonRegItems = []; // items that are NOT on the registry
-        var toTag = [];       // registry items not yet in _reg_items
-
-        ((cart && cart.items) || []).forEach(function(it) {
-          var product = (it && it.product) || it;
-          var pid = Number((product && product.id) || it.productId || 0);
-          if (!pid) return;
-          var isReg = allRegPids ? allRegPids.has(pid) : regSet.has(pid);
-          if (!isReg) {
-            if (!_promptedPids.has(pid)) nonRegItems.push({ pid: pid, quantity: it.quantity || 1 });
-          } else if (!regSet.has(pid)) {
-            toTag.push({ pid: pid, rid: ctxId });
-          }
-        });
-
-        // Tag any confirmed registry items not yet tracked
-        if (toTag.length) {
-          var ri = JSON.parse(localStorage.getItem('_reg_items') || '[]');
-          toTag.forEach(function(x){ ri.push(x); });
-          localStorage.setItem('_reg_items', JSON.stringify(ri));
-        }
-
-        // Prompt about the first un-warned non-registry item
-        if (nonRegItems.length > 0) {
-          var bad = nonRegItems[0];
-          _promptedPids.add(bad.pid);
-          showConflictModal({
-            title: 'Item not in registry',
-            message: 'This item is not on <strong>' + ctxName + '\'s</strong> registry. Remove it to stay in shopping mode, or exit shopping mode to keep it.',
-            primaryLabel: 'Remove item',
-            primaryFn: function() {
-              if (!window.Ecwid || !Ecwid.Cart) return;
-              var badPids = new Set(nonRegItems.map(function(x){ return x.pid; }));
-              Ecwid.Cart.get(function(cart2) {
-                var keep = [];
-                ((cart2 && cart2.items) || []).forEach(function(it) {
-                  var product = (it && it.product) || it;
-                  var pid = Number((product && product.id) || it.productId || 0);
-                  if (pid && !badPids.has(pid)) keep.push({ id: pid, quantity: it.quantity || 1 });
-                });
-                Ecwid.Cart.setItems(keep, function(){
-                  console.log('[registry-cart] removed non-registry item(s) from cart');
-                });
-              });
-            },
-            secondaryLabel: 'Exit shopping mode',
-            secondaryFn: function() {
-              localStorage.removeItem('_reg_ctx');
-              var el = document.getElementById('_reg-ctx-banner');
-              if (el && el.parentNode) el.parentNode.removeChild(el);
-            }
-          });
-        }
-      } catch(e) {}
-    });
+    // no-op — enforcement moved to interval-based check
   }
 
   function hookAll(){
@@ -1702,6 +1637,7 @@ app.get("/widget/cart.js", (req, res) => {
   var _tickCount = 0;
   var _hasMixedCart = false;
   var _mixedReason = '';
+  var _nonRegModalShown = false; // prevents duplicate enforcement modals
 
   setInterval(function(){
     _tickCount++;
@@ -1729,28 +1665,81 @@ app.get("/widget/cart.js", (req, res) => {
 
       restoreCtx(); // keep ec.order.extraFields set for order email
 
-      // Every 3rd tick, check cart for mixed/multi-registry items
-      if (onCheckoutPage && _tickCount % 3 === 0 && window.Ecwid && Ecwid.Cart) {
+      // Every 3rd tick, check cart for (a) mixed/multi-registry items on checkout pages
+      // and (b) non-registry items when in explicit shopping mode (all pages).
+      if (_tickCount % 3 === 0 && window.Ecwid && Ecwid.Cart) {
         var regSet = getRegSet();
         var currentRid = Number(ctx.id);
+        var allRegPids = getAllRegPids(); // null if _reg_all_items not set for this registry
         Ecwid.Cart.get(function(cart){
           var items = (cart && cart.items) || [];
-          if (!items.length) { _hasMixedCart = false; _mixedReason = ''; return; }
-          var hasNonRegistry = false;
-          var hasOtherRegistry = false;
-          items.forEach(function(it){
-            var product = (it && it.product) || it;
-            var pid = Number((product && product.id) || it.productId || 0);
-            if (!pid) return;
-            if (!regSet.has(pid)) {
-              hasNonRegistry = true;
-            } else {
-              var itemRid = getRegIdForProduct(pid);
-              if (itemRid && Number(itemRid) !== currentRid) hasOtherRegistry = true;
+
+          // ── Mixed-cart check (yellow warning banner on checkout pages) ──
+          if (onCheckoutPage) {
+            if (!items.length) { _hasMixedCart = false; _mixedReason = ''; }
+            else {
+              var hasNonRegistry = false;
+              var hasOtherRegistry = false;
+              items.forEach(function(it){
+                var product = (it && it.product) || it;
+                var pid = Number((product && product.id) || it.productId || 0);
+                if (!pid) return;
+                if (!regSet.has(pid)) {
+                  hasNonRegistry = true;
+                } else {
+                  var itemRid = getRegIdForProduct(pid);
+                  if (itemRid && Number(itemRid) !== currentRid) hasOtherRegistry = true;
+                }
+              });
+              _hasMixedCart = hasNonRegistry || hasOtherRegistry;
+              _mixedReason = hasOtherRegistry ? 'multi-registry' : (hasNonRegistry ? 'non-registry' : '');
             }
-          });
-          _hasMixedCart = hasNonRegistry || hasOtherRegistry;
-          _mixedReason = hasOtherRegistry ? 'multi-registry' : (hasNonRegistry ? 'non-registry' : '');
+          }
+
+          // ── Shopping mode enforcement (all pages, only when mode:true + full list available) ──
+          if (ctx.mode && allRegPids) {
+            var nonRegPids = [];
+            items.forEach(function(it) {
+              var product = (it && it.product) || it;
+              var pid = Number((product && product.id) || it.productId || 0);
+              if (pid && !allRegPids.has(pid)) nonRegPids.push({ pid: pid, quantity: it.quantity || 1 });
+            });
+            if (nonRegPids.length === 0) {
+              _nonRegModalShown = false; // cart is clean — reset flag
+            } else if (!_nonRegModalShown && !document.getElementById('_reg-conflict-overlay')) {
+              _nonRegModalShown = true;
+              var ctxNow;
+              try { ctxNow = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e){}
+              var ctxNameNow = (ctxNow && ctxNow.name) || 'this registry';
+              showConflictModal({
+                title: 'Item not in registry',
+                message: 'Your cart has items not on <strong>' + ctxNameNow + '\'s</strong> registry. Remove them to stay in shopping mode, or exit shopping mode.',
+                primaryLabel: 'Remove items',
+                primaryFn: function() {
+                  var badPids = new Set(nonRegPids.map(function(x){ return x.pid; }));
+                  if (!window.Ecwid || !Ecwid.Cart) { _nonRegModalShown = false; return; }
+                  Ecwid.Cart.get(function(c2) {
+                    var keep = [];
+                    ((c2 && c2.items) || []).forEach(function(it2) {
+                      var p2 = (it2 && it2.product) || it2;
+                      var pid2 = Number((p2 && p2.id) || it2.productId || 0);
+                      if (pid2 && !badPids.has(pid2)) keep.push({ id: pid2, quantity: it2.quantity || 1 });
+                    });
+                    Ecwid.Cart.setItems(keep, function(){ _nonRegModalShown = false; });
+                  });
+                },
+                secondaryLabel: 'Exit shopping mode',
+                secondaryFn: function() {
+                  localStorage.removeItem('_reg_ctx');
+                  var el = document.getElementById('_reg-ctx-banner');
+                  if (el && el.parentNode) el.parentNode.removeChild(el);
+                  _nonRegModalShown = false;
+                },
+                cancelLabel: 'Cancel',
+                cancelFn: function() { _nonRegModalShown = false; }
+              });
+            }
+          }
         });
       }
 
@@ -1967,8 +1956,9 @@ app.get("/widget/registry.js", (req, res) => {
   function _enterShoppingModeInner(registry, onSuccess, onCancel) {
     var ctx;
     try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
-    // Already in mode for this registry — nothing to do
+    // Already in mode for this registry — refresh context (ensures mode:true + fresh ts) and succeed
     if (ctx && String(ctx.id) === String(registry.id) && (Date.now() - ctx.ts < 86400000)) {
+      setRegistryExtraFields(registry);
       onSuccess(); return;
     }
     Ecwid.Cart.get(function(cart) {
@@ -2362,6 +2352,29 @@ app.get("/widget/registry.js", (req, res) => {
       try {
         var allPids = items.map(function(i){ return Number(i.product_id); }).filter(Boolean);
         localStorage.setItem('_reg_all_items', JSON.stringify({ rid: registry.id, pids: allPids }));
+      } catch(e) {}
+      // Auto-set _reg_ctx if none is active — this makes the banner appear in the cart
+      // WITHOUT entering shopping mode (no mode:true flag). If a different registry is
+      // already active, leave it alone; the mode bar will show the yellow "switch" UI.
+      try {
+        var _existCtx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
+        var _ctxAlive = _existCtx && _existCtx.id && (Date.now() - _existCtx.ts < 86400000);
+        if (!_ctxAlive) {
+          // No active context — set this registry quietly (no mode flag yet)
+          localStorage.setItem('_reg_ctx', JSON.stringify({
+            id: registry.id,
+            name: registry.display_name,
+            ts: Date.now()
+          }));
+          applyRegistryExtraFields(registry.id, registry.display_name);
+        } else if (String(_existCtx.id) === String(registry.id)) {
+          // Same registry — refresh ts, preserve any existing mode flag
+          _existCtx.ts = Date.now();
+          _existCtx.name = registry.display_name;
+          localStorage.setItem('_reg_ctx', JSON.stringify(_existCtx));
+          applyRegistryExtraFields(registry.id, registry.display_name);
+        }
+        // Different registry — leave alone; mode bar handles the switch UI
       } catch(e) {}
       function setStatus(message, isError){
         const node = container.querySelector('.reg-status');
