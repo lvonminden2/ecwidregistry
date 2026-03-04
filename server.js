@@ -1956,8 +1956,10 @@ app.get("/widget/registry.js", (req, res) => {
   function _enterShoppingModeInner(registry, onSuccess, onCancel) {
     var ctx;
     try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
-    // Already in mode for this registry — refresh context (ensures mode:true + fresh ts) and succeed
-    if (ctx && String(ctx.id) === String(registry.id) && (Date.now() - ctx.ts < 86400000)) {
+    // Already in EXPLICIT mode for this registry — refresh context (mode:true + fresh ts) and succeed.
+    // If ctx exists but mode is NOT set (auto-browse state), fall through to the cart-conflict check
+    // so the user sees the conflict modal before fully entering shopping mode.
+    if (ctx && ctx.mode && String(ctx.id) === String(registry.id) && (Date.now() - ctx.ts < 86400000)) {
       setRegistryExtraFields(registry);
       onSuccess(); return;
     }
@@ -2013,7 +2015,9 @@ app.get("/widget/registry.js", (req, res) => {
     var ctx;
     try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
     var validCtx = ctx && ctx.id && (Date.now() - ctx.ts < 86400000);
-    var inModeHere = validCtx && String(ctx.id) === String(registry.id);
+    // inModeHere is only true when the user has EXPLICITLY entered shopping mode (mode:true).
+    // A bare _reg_ctx set by renderDetail (no mode flag) shows the gray "Enter shopping mode" bar.
+    var inModeHere = validCtx && String(ctx.id) === String(registry.id) && ctx.mode;
     var inModeElsewhere = validCtx && String(ctx.id) !== String(registry.id);
 
     var bar = document.createElement('div');
