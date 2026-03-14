@@ -25,6 +25,8 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const PUBLIC_REGISTRY_URL = process.env.PUBLIC_REGISTRY_URL || "";
 // URL of the page where the registry widget is embedded (used in cart.js "Browse registries" link).
 const REGISTRY_PAGE_URL = process.env.REGISTRY_PAGE_URL || '';
+// Base URL of the Ecwid storefront (used to build "Go to Cart" links from registry pages).
+const ECWID_STORE_URL = process.env.ECWID_STORE_URL || '';
 
 const app = express();
 app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
@@ -461,7 +463,8 @@ app.get("/admin/registry/:id", async (req, res) => {
     .get(registryId) || null;
   const portalLoginUrl = `${BASE_URL}/portal/login`;
   const portalWidgetUrl = `${BASE_URL}/widget/portal.js`;
-  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, ecwidStoreId: ECWID_STORE_ID || '' });
+  const cartWidgetUrl = `${BASE_URL}/widget/cart.js`;
+  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId: ECWID_STORE_ID || '' });
 });
 
 app.post("/admin/registry/:id/edit", (req, res) => {
@@ -1226,18 +1229,37 @@ if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHO
 // Add this script to the Ecwid storefront page (separate from the registry page)
 // to restore registry context during checkout and label cart items.
 // Usage: <script src="https://your-app/widget/cart.js"></script>
+// Cross-domain handoff: registry.js on the Railway domain passes context via
+// a ?_reg= URL parameter. cart.js on the Ecwid store domain reads it, saves
+// to localStorage (on the store domain), and manages banners + order extra fields.
 app.get("/widget/cart.js", (req, res) => {
   res.type("application/javascript");
   res.set("Cache-Control", "no-cache, no-store, must-revalidate");
   res.set("Pragma", "no-cache");
   res.send(`
 (function(){
-  console.log('[registry-cart] v4 loaded');
+  console.log('[registry-cart] v5 loaded');
   var baseUrl = "${BASE_URL}";
   var registryPageUrl = "${REGISTRY_PAGE_URL}";
 
-  // ── Restore ec.order.extraFields from localStorage ──
-  function applyExtraFields(id, name){
+  // ── HTML escaper ──
+  function esc(s) {
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(s || ''));
+    return d.innerHTML;
+  }
+
+  // ── Find the Ecwid store or registry container element ──
+  function findStoreEl() {
+    return document.getElementById('ecwid-store') ||
+      document.querySelector('[id^="my-store-"]') ||
+      document.querySelector('.ecwid') ||
+      document.querySelector('.registry-root') ||
+      document.getElementById('registry-app');
+  }
+
+  // ── Set ec.order.extraFields so the order is tagged with registry info ──
+  function applyExtraFields(id, name) {
     window.ec = window.ec || {};
     window.ec.order = window.ec.order || {};
     window.ec.order.extraFields = window.ec.order.extraFields || {};
@@ -1252,169 +1274,146 @@ app.get("/widget/cart.js", (req, res) => {
     if (window.Ecwid && Ecwid.refreshConfig) Ecwid.refreshConfig();
   }
 
-  function restoreCtx(){
+  // ── Read _reg_ctx from localStorage and apply extra fields ──
+  function restoreCtx() {
     try {
       var raw = localStorage.getItem('_reg_ctx');
-      if (!raw) return;
+      if (!raw) return null;
       var ctx = JSON.parse(raw);
-      if (!ctx || !ctx.id) return;
-      if (Date.now() - ctx.ts > 86400000) { localStorage.removeItem('_reg_ctx'); localStorage.removeItem('_reg_items'); return; }
-      console.log('[registry-cart] restored ctx:', ctx.name);
+      if (!ctx || !ctx.id) return null;
+      if (Date.now() - ctx.ts > 86400000) {
+        localStorage.removeItem('_reg_ctx');
+        localStorage.removeItem('_reg_products');
+        return null;
+      }
       applyExtraFields(ctx.id, ctx.name);
-    } catch(e){}
+      return ctx;
+    } catch(e) { return null; }
   }
 
-  // ── Helpers: read _reg_items in both old ([pid]) and new ([{pid,rid}]) format ──
-  function getRegSet() {
-    var raw = JSON.parse(localStorage.getItem('_reg_items') || '[]');
-    var set = new Set();
-    raw.forEach(function(x){ set.add(Number(x.pid !== undefined ? x.pid : x)); });
-    return set;
-  }
-  function getRegIdForProduct(pid) {
-    var raw = JSON.parse(localStorage.getItem('_reg_items') || '[]');
-    for (var i = 0; i < raw.length; i++) {
-      var x = raw[i];
-      if (Number(x.pid !== undefined ? x.pid : x) === pid) return x.rid || null;
+  // ── URL parameter reader: cross-domain context handoff ──
+  // registry.js on the Railway domain encodes context as ?_reg=BASE64(JSON)
+  function readRegParam() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var encoded = params.get('_reg');
+      if (!encoded) return null;
+      var decoded = JSON.parse(atob(encoded));
+      if (!decoded || !decoded.id) return null;
+      if (decoded.ts && (Date.now() - decoded.ts > 86400000)) return null;
+      return decoded;
+    } catch(e) {
+      console.log('[registry-cart] failed to decode _reg param:', e);
+      return null;
     }
-    return null;
-  }
-
-  // ── Conflict modal (for exit-mode flow in cart/checkout) ──
-  function showConflictModal(opts) {
-    var existing = document.getElementById('_reg-conflict-overlay');
-    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
-    var overlay = document.createElement('div');
-    overlay.id = '_reg-conflict-overlay';
-    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
-    var modal = document.createElement('div');
-    modal.style.cssText = 'background:#fff;border-radius:8px;padding:24px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.2);font-family:sans-serif;';
-    var close = function(){ if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
-    var h3 = document.createElement('h3');
-    h3.textContent = opts.title || '';
-    h3.style.cssText = 'margin:0 0 10px;font-size:1.1em;color:#333;';
-    var p = document.createElement('p');
-    p.innerHTML = opts.message || '';
-    p.style.cssText = 'margin:0 0 18px;font-size:0.9em;color:#555;line-height:1.5;';
-    var btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;';
-    if (opts.cancelLabel) {
-      var cb = document.createElement('button');
-      cb.textContent = opts.cancelLabel;
-      cb.style.cssText = 'background:none;border:1px solid #ccc;border-radius:4px;padding:6px 16px;cursor:pointer;font-size:0.9em;color:#666;';
-      cb.onclick = function(){ close(); if (opts.cancelFn) opts.cancelFn(); };
-      btnRow.appendChild(cb);
-    }
-    if (opts.secondaryLabel) {
-      var sb = document.createElement('button');
-      sb.textContent = opts.secondaryLabel;
-      sb.style.cssText = 'background:#f5f5f5;border:1px solid #ccc;border-radius:4px;padding:6px 16px;cursor:pointer;font-size:0.9em;color:#333;';
-      sb.onclick = function(){ close(); opts.secondaryFn(); };
-      btnRow.appendChild(sb);
-    }
-    if (opts.primaryLabel) {
-      var pb = document.createElement('button');
-      pb.textContent = opts.primaryLabel;
-      pb.style.cssText = 'background:#2a6e3f;border:none;border-radius:4px;padding:6px 16px;cursor:pointer;font-size:0.9em;color:#fff;';
-      pb.onclick = function(){ close(); opts.primaryFn(); };
-      btnRow.appendChild(pb);
-    }
-    modal.appendChild(h3); modal.appendChild(p); modal.appendChild(btnRow);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
   }
 
-  // ── Green banner: active registry mode, cart is clean ──
+  // ── Clean _reg param from URL without triggering navigation ──
+  function cleanRegParam() {
+    try {
+      var url = new URL(window.location.href);
+      if (!url.searchParams.has('_reg')) return;
+      url.searchParams.delete('_reg');
+      window.history.replaceState(null, '', url.toString());
+    } catch(e) {}
+  }
+
+  // ── Fetch registry product list from server API, cache in localStorage ──
+  function fetchRegistryProducts(registryId) {
+    fetch(baseUrl + '/api/registries/' + registryId)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data || !data.items) return;
+        var pids = data.items.map(function(i) { return Number(i.product_id); }).filter(Boolean);
+        localStorage.setItem('_reg_products', JSON.stringify({
+          rid: registryId, pids: pids, ts: Date.now()
+        }));
+        console.log('[registry-cart] cached', pids.length, 'product IDs for registry', registryId);
+      })
+      .catch(function(e) {
+        console.log('[registry-cart] failed to fetch registry products:', e);
+      });
+  }
+
+  // ── Get cached registry product set (fetched from API, stored locally) ──
+  function getRegistryProductSet() {
+    try {
+      var raw = JSON.parse(localStorage.getItem('_reg_products') || 'null');
+      var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
+      if (!raw || !raw.pids || !ctx) return null;
+      if (String(raw.rid) !== String(ctx.id)) return null;
+      // Auto-refresh if older than 1 hour
+      if (raw.ts && (Date.now() - raw.ts > 3600000)) fetchRegistryProducts(ctx.id);
+      return new Set(raw.pids.map(Number));
+    } catch(e) { return null; }
+  }
+
+  // ── Initialize: URL param takes priority, then localStorage ──
+  var regParam = readRegParam();
+  if (regParam) {
+    console.log('[registry-cart] received context via URL param:', regParam.name);
+    localStorage.setItem('_reg_ctx', JSON.stringify({
+      id: regParam.id, name: regParam.name, ts: Date.now()
+    }));
+    applyExtraFields(regParam.id, regParam.name);
+    fetchRegistryProducts(regParam.id);
+    cleanRegParam();
+  } else {
+    restoreCtx();
+  }
+
+  // ── Green banner: active registry context ──
   function showBanner(regName) {
     if (document.getElementById('_reg-ctx-banner')) return;
-    console.log('[registry-cart] showBanner called for:', regName);
     var banner = document.createElement('div');
     banner.id = '_reg-ctx-banner';
     banner.setAttribute('data-state', 'ok');
     banner.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:5px;padding:10px 16px;margin:0 0 12px;font-size:0.9em;color:#2a6e3f;font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;gap:12px;';
     var msg = document.createElement('span');
-    msg.innerHTML = '🎁 Shopping for registry <strong>' + regName + '</strong>';
+    msg.innerHTML = '🎁 Shopping for registry <strong>' + esc(regName) + '</strong>';
     var btn = document.createElement('button');
     btn.textContent = 'Exit Registry';
     btn.style.cssText = 'background:none;border:1px solid #2a6e3f;border-radius:3px;color:#2a6e3f;font-size:0.85em;padding:3px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;';
-    btn.onclick = function(){
-      var ctxName;
-      try { ctxName = JSON.parse(localStorage.getItem('_reg_ctx') || '{}').name || 'this registry'; } catch(e){ ctxName = 'this registry'; }
-      function doExit(){
-        localStorage.removeItem('_reg_ctx');
-        // Keep _reg_items — items stay tagged for order attribution
-        var el = document.getElementById('_reg-ctx-banner');
-        if (el && el.parentNode) el.parentNode.removeChild(el);
-      }
-      if (!window.Ecwid || !Ecwid.Cart) { doExit(); return; }
-      Ecwid.Cart.get(function(cart){
-        var hasItems = cart && cart.items && cart.items.length > 0;
-        if (!hasItems) {
-          doExit();
-        } else {
-          showConflictModal({
-            title: 'Exit shopping mode?',
-            message: 'Your cart has items for <strong>' + ctxName + '</strong>.',
-            primaryLabel: 'Keep cart & exit',
-            primaryFn: doExit,
-            secondaryLabel: 'Clear cart & exit',
-            secondaryFn: function(){
-              Ecwid.Cart.setItems([], function(){
-                localStorage.removeItem('_reg_ctx');
-                localStorage.removeItem('_reg_items');
-                var el = document.getElementById('_reg-ctx-banner');
-                if (el && el.parentNode) el.parentNode.removeChild(el);
-              });
-            },
-            cancelLabel: 'Stay in mode'
-          });
-        }
-      });
+    btn.onclick = function() {
+      localStorage.removeItem('_reg_ctx');
+      localStorage.removeItem('_reg_products');
+      // Clear ec.order.extraFields
+      try {
+        delete window.ec.order.extraFields.registry_id;
+        delete window.ec.order.extraFields.registry_name;
+        if (window.Ecwid && Ecwid.refreshConfig) Ecwid.refreshConfig();
+      } catch(e) {}
+      var el = document.getElementById('_reg-ctx-banner');
+      if (el && el.parentNode) el.parentNode.removeChild(el);
     };
     banner.appendChild(msg);
     banner.appendChild(btn);
-    var storeEl = document.getElementById('ecwid-store') ||
-      document.querySelector('[id^="my-store-"]') ||
-      document.querySelector('.ecwid') ||
-      document.querySelector('.registry-root') ||
-      document.getElementById('registry-app');
+    var storeEl = findStoreEl();
     if (storeEl && storeEl.parentNode) {
       storeEl.parentNode.insertBefore(banner, storeEl);
-      console.log('[registry-cart] banner inserted before:', storeEl.id || storeEl.className);
     } else {
-      console.log('[registry-cart] no store/registry element found — retrying in 800ms');
-      setTimeout(function(){
-        var el = document.getElementById('ecwid-store') ||
-          document.querySelector('[id^="my-store-"]') ||
-          document.querySelector('.ecwid') ||
-          document.querySelector('.registry-root') ||
-          document.getElementById('registry-app');
+      setTimeout(function() {
+        var el = findStoreEl();
         if (el && el.parentNode && !document.getElementById('_reg-ctx-banner')) {
           el.parentNode.insertBefore(banner, el);
-          console.log('[registry-cart] banner inserted (retry) before:', el.id || el.className);
-        } else {
-          console.log('[registry-cart] banner insertion failed — no suitable DOM element');
         }
       }, 800);
     }
   }
 
-  // ── Yellow warning banner: mixed or multi-registry cart ──
-  function showWarningBanner(regName, reason) {
+  // ── Yellow warning banner: cart has non-registry items ──
+  function showWarningBanner(regName) {
     var el = document.getElementById('_reg-ctx-banner');
-    if (el && el.getAttribute('data-state') === 'warn-' + reason) return;
+    if (el && el.getAttribute('data-state') === 'warn') return;
     if (el && el.parentNode) el.parentNode.removeChild(el);
 
     var banner = document.createElement('div');
     banner.id = '_reg-ctx-banner';
-    banner.setAttribute('data-state', 'warn-' + reason);
+    banner.setAttribute('data-state', 'warn');
     banner.style.cssText = 'background:#fff8e1;border:1px solid #f9a825;border-radius:5px;padding:10px 16px;margin:0 0 12px;font-size:0.9em;color:#7a5c00;font-family:sans-serif;';
 
-    var msgText = reason === 'multi-registry'
-      ? '⚠️ Your cart contains items from <strong>multiple registries</strong>. Each order can only contain items from one registry.'
-      : '⚠️ Your cart contains items <strong>not from the registry</strong>. Registry purchases must be in a separate order.';
     var msg = document.createElement('div');
-    msg.innerHTML = msgText;
+    msg.innerHTML = '⚠️ Your cart has items <strong>not on ' + esc(regName) + '\\'s registry</strong>. Registry purchases should be in a separate order.';
     msg.style.marginBottom = '8px';
 
     var btnRow = document.createElement('div');
@@ -1423,43 +1422,21 @@ app.get("/widget/cart.js", (req, res) => {
     var removeBtn = document.createElement('button');
     removeBtn.textContent = 'Remove non-registry items';
     removeBtn.style.cssText = 'background:#f9a825;border:none;border-radius:3px;color:#fff;font-size:0.85em;padding:4px 12px;cursor:pointer;';
-    removeBtn.onclick = function(){ removeNonRegistryItems(); };
+    removeBtn.onclick = function() { removeNonRegistryItems(); };
 
     var exitBtn = document.createElement('button');
     exitBtn.textContent = 'Exit registry mode';
     exitBtn.style.cssText = 'background:none;border:1px solid #7a5c00;border-radius:3px;color:#7a5c00;font-size:0.85em;padding:4px 12px;cursor:pointer;';
-    exitBtn.onclick = function(){
-      var ctxName2;
-      try { ctxName2 = JSON.parse(localStorage.getItem('_reg_ctx') || '{}').name || 'this registry'; } catch(e){ ctxName2 = 'this registry'; }
-      function doExit2(){
-        localStorage.removeItem('_reg_ctx');
-        var b = document.getElementById('_reg-ctx-banner');
-        if (b && b.parentNode) b.parentNode.removeChild(b);
-      }
-      if (!window.Ecwid || !Ecwid.Cart) { doExit2(); return; }
-      Ecwid.Cart.get(function(cart){
-        var hasItems = cart && cart.items && cart.items.length > 0;
-        if (!hasItems) {
-          doExit2();
-        } else {
-          showConflictModal({
-            title: 'Exit shopping mode?',
-            message: 'Your cart has items for <strong>' + ctxName2 + '</strong>.',
-            primaryLabel: 'Keep cart & exit',
-            primaryFn: doExit2,
-            secondaryLabel: 'Clear cart & exit',
-            secondaryFn: function(){
-              Ecwid.Cart.setItems([], function(){
-                localStorage.removeItem('_reg_ctx');
-                localStorage.removeItem('_reg_items');
-                var b = document.getElementById('_reg-ctx-banner');
-                if (b && b.parentNode) b.parentNode.removeChild(b);
-              });
-            },
-            cancelLabel: 'Stay in mode'
-          });
-        }
-      });
+    exitBtn.onclick = function() {
+      localStorage.removeItem('_reg_ctx');
+      localStorage.removeItem('_reg_products');
+      try {
+        delete window.ec.order.extraFields.registry_id;
+        delete window.ec.order.extraFields.registry_name;
+        if (window.Ecwid && Ecwid.refreshConfig) Ecwid.refreshConfig();
+      } catch(e) {}
+      var b = document.getElementById('_reg-ctx-banner');
+      if (b && b.parentNode) b.parentNode.removeChild(b);
     };
 
     btnRow.appendChild(removeBtn);
@@ -1467,52 +1444,43 @@ app.get("/widget/cart.js", (req, res) => {
     banner.appendChild(msg);
     banner.appendChild(btnRow);
 
-    var storeEl = document.getElementById('ecwid-store') ||
-      document.querySelector('[id^="my-store-"]') || document.querySelector('.ecwid') ||
-      document.querySelector('.registry-root') || document.getElementById('registry-app');
+    var storeEl = findStoreEl();
     if (storeEl && storeEl.parentNode) storeEl.parentNode.insertBefore(banner, storeEl);
   }
 
-  // ── Remove non-registry / other-registry items, keep only current registry ──
+  // ── Remove non-registry items from cart, keep only registry products ──
   function removeNonRegistryItems() {
     if (!window.Ecwid || !Ecwid.Cart) return;
-    var regSet = getRegSet();
-    var ctxRid;
-    try { ctxRid = Number(JSON.parse(localStorage.getItem('_reg_ctx') || '{}').id || 0); } catch(e){}
-    Ecwid.Cart.get(function(cart){
+    var regPids = getRegistryProductSet();
+    if (!regPids) return;
+    Ecwid.Cart.get(function(cart) {
       var items = (cart && cart.items) || [];
       var keep = [];
-      items.forEach(function(it){
+      items.forEach(function(it) {
         var product = (it && it.product) || it;
         var pid = Number((product && product.id) || it.productId || 0);
-        if (!pid) return;
-        var inReg = regSet.has(pid);
-        var itemRid = inReg ? getRegIdForProduct(pid) : null;
-        var sameReg = !itemRid || !ctxRid || Number(itemRid) === ctxRid;
-        if (inReg && sameReg) keep.push({ id: pid, quantity: it.quantity || 1 });
+        if (pid && regPids.has(pid)) keep.push({ id: pid, quantity: it.quantity || 1 });
       });
-      Ecwid.Cart.setItems(keep, function(){
-        _hasMixedCart = false;
-        _mixedReason = '';
-        console.log('[registry-cart] kept', keep.length, 'items from current registry');
+      Ecwid.Cart.setItems(keep, function() {
+        console.log('[registry-cart] kept', keep.length, 'registry items');
+        // Reset banner to green
+        var b = document.getElementById('_reg-ctx-banner');
+        if (b && b.parentNode) b.parentNode.removeChild(b);
+        var ctx; try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
+        if (ctx && ctx.name) showBanner(ctx.name);
       });
     });
   }
 
-  // ── Gray prompt: no registry mode on cart page ──
+  // ── Gray prompt: no registry context on cart page ──
   function showBrowsePrompt() {
     if (document.getElementById('_reg-browse-prompt')) return;
     var el = document.createElement('div');
     el.id = '_reg-browse-prompt';
     el.style.cssText = 'background:#f8f8f8;border:1px solid #ddd;border-radius:5px;padding:8px 14px;margin:0 0 12px;font-size:0.85em;color:#666;font-family:sans-serif;';
-    if (registryPageUrl) {
-      el.innerHTML = '🎁 Shopping for a gift registry? <a href="' + registryPageUrl + '" style="color:#2a6e3f;text-decoration:underline;">Browse registries</a>';
-    } else {
-      el.innerHTML = '🎁 Shopping for a gift registry? Visit the registry page to browse and add items.';
-    }
-    var storeEl = document.getElementById('ecwid-store') ||
-      document.querySelector('[id^="my-store-"]') || document.querySelector('.ecwid') ||
-      document.querySelector('.registry-root') || document.getElementById('registry-app');
+    var regUrl = registryPageUrl || (baseUrl + '/registry');
+    el.innerHTML = '🎁 Shopping for a gift registry? <a href="' + esc(regUrl) + '" style="color:#2a6e3f;text-decoration:underline;">Browse registries</a>';
+    var storeEl = findStoreEl();
     if (storeEl && storeEl.parentNode) storeEl.parentNode.insertBefore(el, storeEl);
   }
 
@@ -1528,38 +1496,35 @@ app.get("/widget/cart.js", (req, res) => {
     '[class*="cartProduct"] [class*="name"]'
   ];
 
-  function labelItems(){
-    var rawItems, ctx;
-    try { rawItems = JSON.parse(localStorage.getItem('_reg_items') || 'null'); } catch(e){}
-    try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e){}
-    if (!rawItems || !Array.isArray(rawItems) || !rawItems.length) return;
+  function labelItems() {
+    var ctx; try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
     if (!ctx || !ctx.id) return;
+    var regPids = getRegistryProductSet();
+    if (!regPids) return;
     var regName = ctx.name || 'Gift Registry';
     if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
-    var regSet = getRegSet();
-    Ecwid.Cart.get(function(cart){
+    Ecwid.Cart.get(function(cart) {
       var cartItems = (cart && cart.items) || [];
-      console.log('[registry-cart] labelItems — reg_items count:', rawItems.length, 'cart items:', cartItems.length);
       if (!Array.isArray(cartItems) || !cartItems.length) return;
       var regNames = {};
-      cartItems.forEach(function(it){
+      cartItems.forEach(function(it) {
         var product = (it && it.product) || it;
         var pid = Number((product && product.id) || it.productId || 0);
         var name = (product && product.name) || it.name || '';
-        if (regSet.has(pid) && name) regNames[name] = true;
+        if (regPids.has(pid) && name) regNames[name] = true;
       });
       if (!Object.keys(regNames).length) return;
-      _nameSelectors.forEach(function(sel){
-        document.querySelectorAll(sel).forEach(function(el){
+      _nameSelectors.forEach(function(sel) {
+        document.querySelectorAll(sel).forEach(function(el) {
           if (el.getAttribute('data-reg-labeled')) return;
           var text = (el.textContent || '').trim();
           if (!text) return;
-          var matched = Object.keys(regNames).some(function(n){ return text === n || text.startsWith(n); });
+          var matched = Object.keys(regNames).some(function(n) { return text === n || text.startsWith(n); });
           if (!matched) return;
           el.setAttribute('data-reg-labeled', '1');
           var badge = document.createElement('span');
           badge.className = 'reg-cart-badge';
-          badge.textContent = '🎁 Gift Registry: ' + regName;
+          badge.textContent = '🎁 ' + regName;
           badge.style.cssText = 'display:inline-block;margin-left:8px;padding:2px 7px;background:#f0f4f0;border:1px solid #c8d8c8;border-radius:3px;font-size:0.8em;color:#2a6e3f;font-weight:500;white-space:nowrap;';
           el.appendChild(badge);
         });
@@ -1567,217 +1532,125 @@ app.get("/widget/cart.js", (req, res) => {
     });
   }
 
-  // Pages where badges are injected; banner/prompt show on cart/checkout pages via interval
+  // ── Page tracking ──
   var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER',
                     'ORDER_CONFIRMATION','MY_ORDERS','ORDER_DETAILS'];
   var _cartCheckPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER'];
   var _currentPageType = '';
 
-  function onPage(page){
+  function onPage(page) {
     _currentPageType = page ? (page.type || '') : '';
     restoreCtx();
     if (page && _cartPages.indexOf(page.type) !== -1) {
       setTimeout(labelItems, 600);
-      if (window.MutationObserver){
-        var obs = new MutationObserver(function(){ labelItems(); });
+      if (window.MutationObserver) {
+        var obs = new MutationObserver(function() { labelItems(); });
         var el = document.getElementById('ecwid-store') || document.body;
         obs.observe(el, { childList: true, subtree: true });
-        setTimeout(function(){ obs.disconnect(); }, 10000);
+        setTimeout(function() { obs.disconnect(); }, 10000);
       }
     }
   }
 
-  // ── Get the full set of product IDs that are actually on the active registry ──
-  // Returns null if the list isn't available (fallback: use regSet only).
-  function getAllRegPids() {
-    try {
-      var raw = JSON.parse(localStorage.getItem('_reg_all_items') || 'null');
-      var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
-      if (!raw || !raw.pids || !ctx) return null;
-      if (String(raw.rid) !== String(ctx.id)) return null; // stale / wrong registry
-      return new Set(raw.pids.map(Number));
-    } catch(e) { return null; }
-  }
-
-  // ── Shopping mode enforcement is handled by the interval below ──
-  // Ecwid.OnCartChanged is not reliably available across all storefront versions,
-  // so we poll the cart every few ticks instead (see the three-state interval).
-  function hookCartChanged() {
-    // no-op — enforcement moved to interval-based check
-  }
-
-  function hookAll(){
+  // ── Hook into Ecwid API ──
+  function hookAll() {
     if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(onPage);
-    hookCartChanged();
   }
-
   if (window.Ecwid && Ecwid.OnAPILoaded) {
     Ecwid.OnAPILoaded.add(hookAll);
-    Ecwid.OnAPILoaded.add(restoreCtx);
+    Ecwid.OnAPILoaded.add(function() { restoreCtx(); });
   } else {
-    var _w = setInterval(function(){
-      if (window.Ecwid && Ecwid.OnAPILoaded){
+    var _w = setInterval(function() {
+      if (window.Ecwid && Ecwid.OnAPILoaded) {
         clearInterval(_w);
         Ecwid.OnAPILoaded.add(hookAll);
-        Ecwid.OnAPILoaded.add(restoreCtx);
+        Ecwid.OnAPILoaded.add(function() { restoreCtx(); });
         restoreCtx();
         hookAll();
       }
     }, 300);
   }
-  restoreCtx();
 
-  // ── Startup check ─────────────────────────────────────────────────────────
-  // cart.js loads after Ecwid's initial OnPageLoad fires, so onPage() misses the
-  // current page. Show the correct banner 500ms after load.
-  setTimeout(function(){
-    restoreCtx();
-    try {
-      var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
-      if (ctx && ctx.id && (Date.now() - ctx.ts < 86400000)) {
-        console.log('[registry-cart] startup — showing banner for:', ctx.name);
-        showBanner(ctx.name || 'Gift Registry');
-        setTimeout(labelItems, 600);
-      } else {
-        console.log('[registry-cart] startup — no active registry context');
-      }
-    } catch(e){}
+  // ── Startup banner ──
+  setTimeout(function() {
+    var ctx = restoreCtx();
+    if (ctx) {
+      console.log('[registry-cart] startup — showing banner for:', ctx.name);
+      showBanner(ctx.name || 'Gift Registry');
+      setTimeout(labelItems, 600);
+      // Ensure product list is cached
+      if (!getRegistryProductSet()) fetchRegistryProducts(ctx.id);
+    } else {
+      console.log('[registry-cart] startup — no active registry context');
+    }
   }, 500);
 
-  // ── Three-state interval ──────────────────────────────────────────────────
-  // State 1 (no ctx): hide registry banner, show "browse registries" prompt on cart pages
-  // State 2 (ctx + mixed cart): show yellow warning banner
-  // State 3 (ctx + clean cart): show green registry banner
-  // Cart mix-check runs every 3rd tick (~4.5s) to avoid hammering Ecwid.Cart.get()
+  // ── Polling interval ──
+  // Checks registry context and cart state every 2s.
+  // Shows green banner (registry active), yellow warning (mixed cart),
+  // or gray browse prompt (no context).
   var _tickCount = 0;
   var _hasMixedCart = false;
-  var _mixedReason = '';
-  var _nonRegModalShown = false; // prevents duplicate enforcement modals
 
-  setInterval(function(){
+  setInterval(function() {
     _tickCount++;
     try {
-      var ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
+      var ctx; try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
       var onCartPage = _cartPages.indexOf(_currentPageType) !== -1;
       var onCheckoutPage = _cartCheckPages.indexOf(_currentPageType) !== -1;
 
-      // Diagnostic log every 10th tick (~15s)
-      if (_tickCount % 10 === 1) {
-        console.log('[registry-cart] tick', _tickCount, '| ctx:', ctx ? (ctx.name + ' mode:' + (ctx.mode||false)) : 'null', '| page:', _currentPageType || 'unknown', '| banner:', !!document.getElementById('_reg-ctx-banner'));
-      }
-
       if (!ctx || !ctx.id || (Date.now() - ctx.ts > 86400000)) {
-        // State 1: no registry context
+        // No context — clean up
         var old = document.getElementById('_reg-ctx-banner');
         if (old && old.parentNode) old.parentNode.removeChild(old);
-        if (onCartPage) {
-          showBrowsePrompt();
-        } else {
+        if (onCartPage) showBrowsePrompt();
+        else {
           var bp = document.getElementById('_reg-browse-prompt');
           if (bp && bp.parentNode) bp.parentNode.removeChild(bp);
         }
         return;
       }
 
-      // Active registry context — hide browse prompt
+      // Active context — remove browse prompt, keep extra fields applied
       var bp = document.getElementById('_reg-browse-prompt');
       if (bp && bp.parentNode) bp.parentNode.removeChild(bp);
+      restoreCtx();
 
-      restoreCtx(); // keep ec.order.extraFields set for order email
-
-      // Every 3rd tick, check cart for (a) mixed/multi-registry items on checkout pages
-      // and (b) non-registry items when in explicit shopping mode (all pages).
-      if (_tickCount % 3 === 0 && window.Ecwid && Ecwid.Cart) {
-        var regSet = getRegSet();
-        var currentRid = Number(ctx.id);
-        var allRegPids = getAllRegPids(); // null if _reg_all_items not set for this registry
-        Ecwid.Cart.get(function(cart){
-          var items = (cart && cart.items) || [];
-
-          // ── Mixed-cart check (yellow warning banner on checkout pages) ──
-          if (onCheckoutPage) {
-            if (!items.length) { _hasMixedCart = false; _mixedReason = ''; }
-            else {
-              var hasNonRegistry = false;
-              var hasOtherRegistry = false;
-              items.forEach(function(it){
-                var product = (it && it.product) || it;
-                var pid = Number((product && product.id) || it.productId || 0);
-                if (!pid) return;
-                if (!regSet.has(pid)) {
-                  hasNonRegistry = true;
-                } else {
-                  var itemRid = getRegIdForProduct(pid);
-                  if (itemRid && Number(itemRid) !== currentRid) hasOtherRegistry = true;
-                }
-              });
-              _hasMixedCart = hasNonRegistry || hasOtherRegistry;
-              _mixedReason = hasOtherRegistry ? 'multi-registry' : (hasNonRegistry ? 'non-registry' : '');
-            }
-          }
-
-          // ── Shopping mode enforcement (all pages, only when mode:true + full list available) ──
-          if (ctx.mode && allRegPids) {
-            var nonRegPids = [];
+      // Every 3rd tick (~6s), validate cart on cart/checkout pages
+      if (_tickCount % 3 === 0 && onCheckoutPage && window.Ecwid && Ecwid.Cart) {
+        var regPids = getRegistryProductSet();
+        if (regPids) {
+          Ecwid.Cart.get(function(cart) {
+            var items = (cart && cart.items) || [];
+            var hasNonReg = false;
             items.forEach(function(it) {
               var product = (it && it.product) || it;
               var pid = Number((product && product.id) || it.productId || 0);
-              if (pid && !allRegPids.has(pid)) nonRegPids.push({ pid: pid, quantity: it.quantity || 1 });
+              if (pid && !regPids.has(pid)) hasNonReg = true;
             });
-            if (nonRegPids.length === 0) {
-              _nonRegModalShown = false; // cart is clean — reset flag
-            } else if (!_nonRegModalShown && !document.getElementById('_reg-conflict-overlay')) {
-              _nonRegModalShown = true;
-              var ctxNow;
-              try { ctxNow = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e){}
-              var ctxNameNow = (ctxNow && ctxNow.name) || 'this registry';
-              showConflictModal({
-                title: 'Item not in registry',
-                message: 'Your cart has items not on <strong>' + ctxNameNow + '\'s</strong> registry. Remove them to stay in shopping mode, or exit shopping mode.',
-                primaryLabel: 'Remove items',
-                primaryFn: function() {
-                  var badPids = new Set(nonRegPids.map(function(x){ return x.pid; }));
-                  if (!window.Ecwid || !Ecwid.Cart) { _nonRegModalShown = false; return; }
-                  Ecwid.Cart.get(function(c2) {
-                    var keep = [];
-                    ((c2 && c2.items) || []).forEach(function(it2) {
-                      var p2 = (it2 && it2.product) || it2;
-                      var pid2 = Number((p2 && p2.id) || it2.productId || 0);
-                      if (pid2 && !badPids.has(pid2)) keep.push({ id: pid2, quantity: it2.quantity || 1 });
-                    });
-                    Ecwid.Cart.setItems(keep, function(){ _nonRegModalShown = false; });
-                  });
-                },
-                secondaryLabel: 'Exit shopping mode',
-                secondaryFn: function() {
-                  localStorage.removeItem('_reg_ctx');
-                  var el = document.getElementById('_reg-ctx-banner');
-                  if (el && el.parentNode) el.parentNode.removeChild(el);
-                  _nonRegModalShown = false;
-                },
-                cancelLabel: 'Cancel',
-                cancelFn: function() { _nonRegModalShown = false; }
-              });
+            if (hasNonReg && !_hasMixedCart) {
+              _hasMixedCart = true;
+              showWarningBanner(ctx.name || 'Gift Registry');
+            } else if (!hasNonReg && _hasMixedCart) {
+              _hasMixedCart = false;
+              var b = document.getElementById('_reg-ctx-banner');
+              if (b && b.parentNode) b.parentNode.removeChild(b);
+              showBanner(ctx.name || 'Gift Registry');
             }
-          }
-        });
+          });
+        }
       }
 
-      // Show appropriate banner
-      if (_hasMixedCart && onCheckoutPage) {
-        // State 2: mixed cart warning
-        showWarningBanner(ctx.name || 'Gift Registry', _mixedReason);
-      } else {
-        // State 3: clean cart — ensure green banner is showing
+      // Ensure banner is showing
+      if (!_hasMixedCart) {
         var banner = document.getElementById('_reg-ctx-banner');
-        var bannerState = banner ? banner.getAttribute('data-state') : null;
-        if (!banner || bannerState === 'warn-non-registry' || bannerState === 'warn-multi-registry') {
+        if (!banner || banner.getAttribute('data-state') === 'warn') {
           if (banner && banner.parentNode) banner.parentNode.removeChild(banner);
           showBanner(ctx.name || 'Gift Registry');
         }
       }
-    } catch(e){}
-  }, 1500);
+    } catch(e) {}
+  }, 2000);
 })();
 `);
 });
@@ -1789,9 +1662,10 @@ app.get("/widget/registry.js", (req, res) => {
   res.set("Pragma", "no-cache");
   res.send(`
 (function(){
-  console.log('[registry-widget] v4 loaded');
+  console.log('[registry-widget] v5 loaded');
   const baseUrl = "${BASE_URL}";
   const defaultStoreId = "${ECWID_STORE_ID}";
+  const ecwidStoreUrl = "${ECWID_STORE_URL}";
 
   // Inject store fonts if not already present
   if (!document.querySelector('link[data-registry-fonts]')) {
@@ -1895,192 +1769,65 @@ app.get("/widget/registry.js", (req, res) => {
   }
 
   function setRegistryExtraFields(registry){
-    // Persist to localStorage so it survives page navigation to checkout
+    // Persist to localStorage so it survives page navigation (same-domain case)
     try {
       localStorage.setItem('_reg_ctx', JSON.stringify({
         id: registry.id,
         name: registry.display_name,
-        ts: Date.now(),
-        mode: true
+        ts: Date.now()
       }));
     } catch(e){}
     applyRegistryExtraFields(registry.id, registry.display_name);
   }
 
-  // ── Shopping Mode helpers ────────────────────────────────────────────────
-
-  // Centered overlay modal for cart-conflict choices
-  function showConflictModal(opts) {
-    var existing = document.getElementById('_reg-conflict-overlay');
-    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
-    var overlay = document.createElement('div');
-    overlay.id = '_reg-conflict-overlay';
-    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
-    var modal = document.createElement('div');
-    modal.style.cssText = 'background:#fff;border-radius:8px;padding:24px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.2);font-family:sans-serif;';
-    var close = function(){ if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
-    var h3 = document.createElement('h3');
-    h3.textContent = opts.title || '';
-    h3.style.cssText = 'margin:0 0 10px;font-size:1.1em;color:#333;';
-    var p = document.createElement('p');
-    p.innerHTML = opts.message || '';
-    p.style.cssText = 'margin:0 0 18px;font-size:0.9em;color:#555;line-height:1.5;';
-    var btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;';
-    if (opts.cancelLabel) {
-      var cb = document.createElement('button');
-      cb.textContent = opts.cancelLabel;
-      cb.style.cssText = 'background:none;border:1px solid #ccc;border-radius:4px;padding:6px 16px;cursor:pointer;font-size:0.9em;color:#666;';
-      cb.onclick = function(){ close(); if (opts.cancelFn) opts.cancelFn(); };
-      btnRow.appendChild(cb);
-    }
-    if (opts.secondaryLabel) {
-      var sb = document.createElement('button');
-      sb.textContent = opts.secondaryLabel;
-      sb.style.cssText = 'background:#f5f5f5;border:1px solid #ccc;border-radius:4px;padding:6px 16px;cursor:pointer;font-size:0.9em;color:#333;';
-      sb.onclick = function(){ close(); opts.secondaryFn(); };
-      btnRow.appendChild(sb);
-    }
-    if (opts.primaryLabel) {
-      var pb = document.createElement('button');
-      pb.textContent = opts.primaryLabel;
-      pb.style.cssText = 'background:#2a6e3f;border:none;border-radius:4px;padding:6px 16px;cursor:pointer;font-size:0.9em;color:#fff;';
-      pb.onclick = function(){ close(); opts.primaryFn(); };
-      btnRow.appendChild(pb);
-    }
-    modal.appendChild(h3); modal.appendChild(p); modal.appendChild(btnRow);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
+  // ── Cross-domain context handoff ────────────────────────────────────────
+  // Encode registry context as a URL parameter for passing to the Ecwid store.
+  // cart.js on the store domain reads ?_reg= and saves to its own localStorage.
+  function buildRegParam(registry) {
+    return '_reg=' + btoa(JSON.stringify({
+      id: registry.id, name: registry.display_name, ts: Date.now()
+    }));
   }
 
-  // Tag all current cart items as belonging to rid in _reg_items
-  function _commitCartToMode(rid, callback) {
-    if (!window.Ecwid || !Ecwid.Cart) { callback(); return; }
-    Ecwid.Cart.get(function(cart) {
-      var items = (cart && cart.items) || [];
-      var ri = JSON.parse(localStorage.getItem('_reg_items') || '[]');
-      var existing = new Set(ri.map(function(x){ return Number(x.pid !== undefined ? x.pid : x); }));
-      items.forEach(function(it) {
-        var product = (it && it.product) || it;
-        var pid = Number((product && product.id) || it.productId || 0);
-        if (pid && !existing.has(pid)) { ri.push({ pid: pid, rid: Number(rid) }); existing.add(pid); }
-      });
-      localStorage.setItem('_reg_items', JSON.stringify(ri));
-      callback();
-    });
+  function buildStoreCartUrl(registry) {
+    if (!ecwidStoreUrl) return null;
+    var sep = ecwidStoreUrl.indexOf('?') !== -1 ? '&' : '?';
+    return ecwidStoreUrl + sep + buildRegParam(registry);
   }
 
-  function _clearCart(callback) {
-    if (!window.Ecwid || !Ecwid.Cart) { callback(); return; }
-    Ecwid.Cart.setItems([], function(){ callback(); });
+  // ── Sticky "Go to Cart" bar at bottom of registry detail ──
+  function showCartBar(registry, container) {
+    if (container.querySelector('#reg-cart-bar')) return;
+    var cartUrl = buildStoreCartUrl(registry);
+    if (!cartUrl) return;
+    var bar = document.createElement('div');
+    bar.id = 'reg-cart-bar';
+    bar.style.cssText = 'position:sticky;bottom:0;background:#2a6e3f;color:#fff;padding:12px 16px;border-radius:5px 5px 0 0;margin-top:16px;text-align:center;font-family:DM Sans,sans-serif;font-size:0.95em;z-index:100;';
+    bar.innerHTML = 'Ready to check out? <a href="' + esc(cartUrl) + '" style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">Go to Cart \\u2192</a>';
+    container.appendChild(bar);
   }
 
-  // Enter shopping mode for a registry (assumes ensureCartApi already resolved)
-  function _enterShoppingModeInner(registry, onSuccess, onCancel) {
-    var ctx;
-    try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
-    // Already in EXPLICIT mode for this registry — refresh context (mode:true + fresh ts) and succeed.
-    // If ctx exists but mode is NOT set (auto-browse state), fall through to the cart-conflict check
-    // so the user sees the conflict modal before fully entering shopping mode.
-    if (ctx && ctx.mode && String(ctx.id) === String(registry.id) && (Date.now() - ctx.ts < 86400000)) {
-      setRegistryExtraFields(registry);
-      onSuccess(); return;
-    }
-    Ecwid.Cart.get(function(cart) {
-      var hasItems = cart && cart.items && cart.items.length > 0;
-      if (!hasItems) {
-        setRegistryExtraFields(registry); onSuccess();
-      } else {
-        var currentName = ctx && ctx.name ? ctx.name : null;
-        showConflictModal({
-          title: currentName ? 'Switching registries' : 'Items already in your cart',
-          message: currentName
-            ? 'You\\'re shopping for <strong>' + esc(currentName) + '</strong>. Switch to <strong>' + esc(registry.display_name) + '</strong>?'
-            : 'Your cart has items. Add them to <strong>' + esc(registry.display_name) + '</strong>\\\'s registry, or clear the cart to start fresh.',
-          primaryLabel: 'Add cart to ' + esc(registry.display_name),
-          primaryFn: function() { _commitCartToMode(registry.id, function(){ setRegistryExtraFields(registry); onSuccess(); }); },
-          secondaryLabel: 'Clear cart',
-          secondaryFn: function() { _clearCart(function(){ localStorage.removeItem('_reg_items'); setRegistryExtraFields(registry); onSuccess(); }); },
-          cancelLabel: 'Cancel',
-          cancelFn: onCancel
-        });
-      }
-    });
-  }
-
-  // Exit shopping mode (assumes ensureCartApi already resolved)
-  function _exitShoppingModeInner(onDone) {
-    var ctx;
-    try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
-    if (!ctx) { onDone(); return; }
-    Ecwid.Cart.get(function(cart) {
-      var hasItems = cart && cart.items && cart.items.length > 0;
-      if (!hasItems) {
-        localStorage.removeItem('_reg_ctx'); onDone();
-      } else {
-        showConflictModal({
-          title: 'Exit shopping mode?',
-          message: 'Your cart has items for <strong>' + esc(ctx.name || 'this registry') + '</strong>.',
-          primaryLabel: 'Keep cart & exit',
-          primaryFn: function(){ localStorage.removeItem('_reg_ctx'); onDone(); },
-          secondaryLabel: 'Clear cart & exit',
-          secondaryFn: function(){ _clearCart(function(){ localStorage.removeItem('_reg_ctx'); localStorage.removeItem('_reg_items'); onDone(); }); },
-          cancelLabel: 'Stay in mode'
-        });
-      }
-    });
-  }
-
-  // Render the shopping mode bar above the item list in registry detail view
-  function renderModeBar(registry, container, effectiveStoreId) {
+  // ── Simple info bar above registry items ──
+  function renderModeBar(registry, container) {
     var old = container.querySelector('#reg-mode-bar');
     if (old && old.parentNode) old.parentNode.removeChild(old);
-    var ctx;
-    try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e) {}
-    var validCtx = ctx && ctx.id && (Date.now() - ctx.ts < 86400000);
-    // inModeHere is only true when the user has EXPLICITLY entered shopping mode (mode:true).
-    // A bare _reg_ctx set by renderDetail (no mode flag) shows the gray "Enter shopping mode" bar.
-    var inModeHere = validCtx && String(ctx.id) === String(registry.id) && ctx.mode;
-    var inModeElsewhere = validCtx && String(ctx.id) !== String(registry.id);
 
     var bar = document.createElement('div');
     bar.id = 'reg-mode-bar';
+    bar.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:5px;padding:8px 14px;margin:10px 0 14px;font-size:0.9em;color:#2a6e3f;font-family:DM Sans,sans-serif;display:flex;align-items:center;justify-content:space-between;gap:8px;';
     var msg = document.createElement('span');
-    var actionBtn = document.createElement('button');
-
-    if (inModeHere) {
-      bar.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:5px;padding:8px 14px;margin:10px 0 14px;font-size:0.9em;color:#2a6e3f;font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;gap:8px;';
-      msg.innerHTML = '\\uD83D\\uDED2 Shopping mode active for <strong>' + esc(registry.display_name) + '</strong>';
-      actionBtn.textContent = 'Exit shopping mode';
-      actionBtn.style.cssText = 'background:none;border:1px solid #2a6e3f;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:0.85em;color:#2a6e3f;white-space:nowrap;flex-shrink:0;';
-      actionBtn.onclick = function() {
-        ensureCartApi(effectiveStoreId).then(function(){
-          _exitShoppingModeInner(function(){ renderModeBar(registry, container, effectiveStoreId); });
-        }).catch(function(){ localStorage.removeItem('_reg_ctx'); renderModeBar(registry, container, effectiveStoreId); });
-      };
-    } else if (inModeElsewhere) {
-      bar.style.cssText = 'background:#fff8e1;border:1px solid #f9a825;border-radius:5px;padding:8px 14px;margin:10px 0 14px;font-size:0.9em;color:#7a5c00;font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;gap:8px;';
-      msg.innerHTML = '\\uD83D\\uDED2 Shopping for <strong>' + esc(ctx.name) + '</strong>';
-      actionBtn.textContent = 'Switch to ' + esc(registry.display_name);
-      actionBtn.style.cssText = 'background:#f9a825;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:0.85em;color:#fff;white-space:nowrap;flex-shrink:0;';
-      actionBtn.onclick = function() {
-        ensureCartApi(effectiveStoreId).then(function(){
-          _enterShoppingModeInner(registry, function(){ renderModeBar(registry, container, effectiveStoreId); }, function(){});
-        });
-      };
-    } else {
-      bar.style.cssText = 'background:#f8f8f8;border:1px solid #ddd;border-radius:5px;padding:8px 14px;margin:10px 0 14px;font-size:0.9em;color:#666;font-family:sans-serif;display:flex;align-items:center;justify-content:space-between;gap:8px;';
-      msg.textContent = '\\uD83C\\uDF81 Shopping for ' + registry.display_name;
-      actionBtn.textContent = 'Enter shopping mode';
-      actionBtn.style.cssText = 'background:#2a6e3f;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:0.85em;color:#fff;white-space:nowrap;flex-shrink:0;';
-      actionBtn.onclick = function() {
-        ensureCartApi(effectiveStoreId).then(function(){
-          _enterShoppingModeInner(registry, function(){ renderModeBar(registry, container, effectiveStoreId); }, function(){});
-        });
-      };
-    }
+    msg.innerHTML = '\\uD83C\\uDF81 Shopping for <strong>' + esc(registry.display_name) + '</strong>';
     bar.appendChild(msg);
-    bar.appendChild(actionBtn);
+
+    var cartUrl = buildStoreCartUrl(registry);
+    if (cartUrl) {
+      var link = document.createElement('a');
+      link.href = cartUrl;
+      link.textContent = 'Go to Cart \\u2192';
+      link.style.cssText = 'color:#2a6e3f;font-size:0.85em;text-decoration:underline;white-space:nowrap;flex-shrink:0;';
+      bar.appendChild(link);
+    }
+
     var itemsEl = container.querySelector('.reg-items');
     if (itemsEl) container.insertBefore(bar, itemsEl);
     else container.appendChild(bar);
@@ -2121,92 +1868,6 @@ app.get("/widget/registry.js", (req, res) => {
     }, 300);
   }
   restoreRegistryContext();
-
-  // ── Per-item "Gift Registry" badge in Ecwid cart / checkout ───────────────
-  // After each Ecwid page navigation, inject a small badge next to any cart
-  // item that was added from the registry widget.
-  (function(){
-    var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER','ORDER_CONFIRMATION'];
-
-    // Selectors to find a cart item's name/title element in Ecwid's DOM.
-    // Ecwid's class names are stable across their storefront versions.
-    var _nameSelectors = [
-      '.ec-cart-item__name',
-      '.ec-cart-item .ec-cart-item__title',
-      '[class*="cart-item"] [class*="title"]',
-      '[class*="cart-item"] [class*="name"]'
-    ];
-
-    function _labelItems(){
-      var rawItems = null;
-      var ctx = null;
-      try { rawItems = JSON.parse(localStorage.getItem('_reg_items') || 'null'); } catch(e){}
-      try { ctx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null'); } catch(e){}
-      if (!rawItems || !Array.isArray(rawItems) || !rawItems.length) return;
-      if (!ctx || !ctx.id) return;
-      var regName = ctx.name || 'Gift Registry';
-
-      if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
-      Ecwid.Cart.get(function(cart){
-        var cartItems = (cart && (cart.items || cart.products)) || [];
-        if (!Array.isArray(cartItems) || !cartItems.length) return;
-
-        // Build map: productId → item name (for DOM matching)
-        var regSet = new Set(rawItems.map(Number));
-        var regNames = {};
-        cartItems.forEach(function(it){
-          var pid = Number(it.productId || it.id || 0);
-          if (regSet.has(pid)) regNames[it.name] = true;
-        });
-        if (!Object.keys(regNames).length) return;
-
-        // Try each selector and inject badge next to matching items
-        _nameSelectors.forEach(function(sel){
-          document.querySelectorAll(sel).forEach(function(el){
-            if (el.getAttribute('data-reg-labeled')) return;
-            var text = (el.textContent || '').trim();
-            if (!text) return;
-            // Match if this element's text equals one of the registry item names
-            var matched = Object.keys(regNames).some(function(n){ return text === n || text.startsWith(n); });
-            if (!matched) return;
-            el.setAttribute('data-reg-labeled', '1');
-            var badge = document.createElement('span');
-            badge.className = 'reg-cart-badge';
-            badge.textContent = 'Gift Registry: ' + regName;
-            el.appendChild(badge);
-          });
-        });
-      });
-    }
-
-    // Re-run labeling on each cart/checkout page load
-    // Use a short delay to let Ecwid finish rendering its DOM
-    function _onPageForLabel(page){
-      if (!page || _cartPages.indexOf(page.type) === -1) return;
-      setTimeout(_labelItems, 600);
-      // Also observe for late DOM renders
-      if (window.MutationObserver){
-        var obs = new MutationObserver(function(){
-          _labelItems();
-        });
-        var storeEl = document.getElementById('ecwid-store') || document.body;
-        obs.observe(storeEl, { childList: true, subtree: true });
-        // Disconnect after 10s to avoid lingering observers
-        setTimeout(function(){ obs.disconnect(); }, 10000);
-      }
-    }
-
-    function _hookLabel(){
-      if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(_onPageForLabel);
-    }
-    if (window.Ecwid && Ecwid.OnAPILoaded) {
-      Ecwid.OnAPILoaded.add(_hookLabel);
-    } else {
-      var _labelWait = setInterval(function(){
-        if (window.Ecwid && Ecwid.OnAPILoaded){ clearInterval(_labelWait); Ecwid.OnAPILoaded.add(_hookLabel); }
-      }, 300);
-    }
-  })();
 
   // ── Registry portal inline in Ecwid account section ───────────────────────
   // When a logged-in customer visits their Ecwid account section, silently
@@ -2375,42 +2036,19 @@ app.get("/widget/registry.js", (req, res) => {
       const registry = payload.registry;
       const items = payload.items || [];
       const effectiveStoreId = storeId || registry.store_id || defaultStoreId || '';
-      // Persist registry product IDs so cart.js can validate items in shopping mode
-      try {
-        var allPids = items.map(function(i){ return Number(i.product_id); }).filter(Boolean);
-        localStorage.setItem('_reg_all_items', JSON.stringify({ rid: registry.id, pids: allPids }));
-      } catch(e) {}
-      // Auto-set _reg_ctx if none is active — this makes the banner appear in the cart
-      // WITHOUT entering shopping mode (no mode:true flag). If a different registry is
-      // already active, leave it alone; the mode bar will show the yellow "switch" UI.
-      try {
-        var _existCtx = JSON.parse(localStorage.getItem('_reg_ctx') || 'null');
-        var _ctxAlive = _existCtx && _existCtx.id && (Date.now() - _existCtx.ts < 86400000);
-        if (!_ctxAlive) {
-          // No active context — set this registry quietly (no mode flag yet)
-          localStorage.setItem('_reg_ctx', JSON.stringify({
-            id: registry.id,
-            name: registry.display_name,
-            ts: Date.now()
-          }));
-          applyRegistryExtraFields(registry.id, registry.display_name);
-          console.log('[registry-widget] auto-set _reg_ctx for:', registry.display_name, '(no prior context)');
-        } else if (String(_existCtx.id) === String(registry.id)) {
-          // Same registry — refresh ts, preserve any existing mode flag
-          _existCtx.ts = Date.now();
-          _existCtx.name = registry.display_name;
-          localStorage.setItem('_reg_ctx', JSON.stringify(_existCtx));
-          applyRegistryExtraFields(registry.id, registry.display_name);
-          console.log('[registry-widget] refreshed _reg_ctx for:', registry.display_name, 'mode:', _existCtx.mode || false);
-        } else {
-          console.log('[registry-widget] different registry active:', _existCtx.name, '— not overriding');
-        }
-      } catch(e) { console.warn('[registry-widget] auto-set error:', e); }
+
+      // Set registry context in localStorage (for same-domain embedded case)
+      setRegistryExtraFields(registry);
+
       function setStatus(message, isError){
         const node = container.querySelector('.reg-status');
         if (!node) return;
         node.className = isError ? 'reg-status reg-error' : 'reg-status reg-ok';
-        node.textContent = message || '';
+        if (isError) {
+          node.textContent = message || '';
+        } else {
+          node.innerHTML = message || '';
+        }
       }
       const rows = items.map(item => {
         const stillNeeded = Number(item.still_needed ?? Math.max(0, (item.desired_qty || 0) - (item.purchased_qty || 0)));
@@ -2436,8 +2074,8 @@ app.get("/widget/registry.js", (req, res) => {
         back +
         '<div class="reg-items">' + rows + '</div>';
 
-      // Inject shopping mode bar above item list
-      renderModeBar(registry, container, effectiveStoreId);
+      // Inject info bar above item list
+      renderModeBar(registry, container);
 
       const backBtn = container.querySelector('.reg-back-btn');
       if (backBtn) {
@@ -2467,29 +2105,23 @@ app.get("/widget/registry.js", (req, res) => {
           btn.textContent = 'Adding...';
           ensureCartApi(effectiveStoreId)
             .then(function(){
-              // Enter shopping mode (handles conflict modal if cart has items from another registry)
-              _enterShoppingModeInner(registry, function onEntered(){
-                // Mode is active — track this item
-                try {
-                  var ri = JSON.parse(localStorage.getItem('_reg_items') || '[]');
-                  var alreadyAdded = ri.some(function(x){ return (x.pid !== undefined ? x.pid : x) === productId; });
-                  if (!alreadyAdded) ri.push({ pid: productId, rid: registry.id });
-                  localStorage.setItem('_reg_items', JSON.stringify(ri));
-                } catch(e){}
-                // Refresh mode bar to reflect active state
-                renderModeBar(registry, container, effectiveStoreId);
-              doAddToCart();
-              }, function onCancelled(){
-                btn.disabled = false;
-                btn.textContent = originalText;
-              });
+              // Set registry context and add item directly
+              setRegistryExtraFields(registry);
 
-              function doAddToCart(){
               let settled = false;
               function finish(ok, message){
                 if (settled) return;
                 settled = true;
-                setStatus(message || (ok ? 'Added to cart.' : 'Failed to add to cart.'), !ok);
+                if (ok) {
+                  var cartUrl = buildStoreCartUrl(registry);
+                  var extra = cartUrl
+                    ? ' <a href="' + esc(cartUrl) + '" style="color:#2a6e3f;text-decoration:underline;font-weight:500;">Go to Cart \\u2192</a>'
+                    : '';
+                  setStatus((message || 'Added to cart.') + extra, false);
+                  showCartBar(registry, container);
+                } else {
+                  setStatus(message || 'Failed to add to cart.', true);
+                }
                 btn.disabled = false;
                 btn.textContent = originalText;
               }
@@ -2562,7 +2194,6 @@ app.get("/widget/registry.js", (req, res) => {
                   });
                 }
               }, 3500);
-              } // end doAddToCart
             })
             .catch(function(){
               setStatus('Cart API unavailable on this page. Open this inside your Ecwid storefront.', true);

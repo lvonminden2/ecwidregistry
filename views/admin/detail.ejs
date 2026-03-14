@@ -215,10 +215,11 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
         <div class="muted" style="font-size:11px;margin-top:6px">The registrant visits this link and signs in with their store account — no password required.</div>
       </div>
       <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
-        <div class="label" style="margin-bottom:6px">Embed in Ecwid account section (optional)</div>
-        <div class="muted" style="font-size:12px;margin-bottom:8px">To show the portal automatically when the registrant visits their Ecwid account, add this to <strong>Ecwid Control Panel → Settings → Design → Custom JavaScript</strong>:</div>
-        <code style="display:block;font-size:11px;background:var(--bg);padding:8px 10px;border:1px solid var(--border);border-radius:4px;overflow:auto;white-space:nowrap">&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;</code>
-        <button class="btn secondary copy-link-btn" data-url='&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;' style="margin-top:8px">Copy snippet</button>
+        <div class="label" style="margin-bottom:6px">Embed in Ecwid Custom JavaScript</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">Add <strong>both</strong> scripts below to <strong>Ecwid Control Panel &rarr; Settings &rarr; Design &rarr; Custom JavaScript</strong>. The portal script shows the registrant's management UI in their account. The cart script shows registry banners and tags orders at checkout.</div>
+        <code style="display:block;font-size:11px;background:var(--bg);padding:8px 10px;border:1px solid var(--border);border-radius:4px;overflow:auto;white-space:pre-wrap">&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;
+&lt;script src="<%= cartWidgetUrl %>"&gt;&lt;/script&gt;</code>
+        <button class="btn secondary copy-link-btn" data-url='&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;&#10;&lt;script src="<%= cartWidgetUrl %>"&gt;&lt;/script&gt;' style="margin-top:8px">Copy snippet</button>
       </div>
       <form method="post" action="/admin/registry/<%= registry.id %>/account/delete" onsubmit="return confirm('Remove registrant access? They will no longer be able to sign in.');" style="margin-top:16px">
         <button class="btn secondary" type="submit" style="font-size:10px">Remove access</button>
