@@ -1362,9 +1362,16 @@ app.get("/widget/cart.js", (req, res) => {
     restoreCtx();
   }
 
+  // Track current banner name so we can update when context changes
+  var _bannerName = '';
+
   // ── Green banner: active registry context ──
   function showBanner(regName) {
-    if (document.getElementById('_reg-ctx-banner')) return;
+    var existing = document.getElementById('_reg-ctx-banner');
+    if (existing && _bannerName === regName) return;
+    // Remove stale banner if name changed
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    _bannerName = regName;
     var banner = document.createElement('div');
     banner.id = '_reg-ctx-banner';
     banner.setAttribute('data-state', 'ok');
@@ -1789,21 +1796,43 @@ app.get("/widget/registry.js", (req, res) => {
     }));
   }
 
-  function buildStoreCartUrl(registry) {
+  // Detect if we're on the same domain as the Ecwid store
+  function isSameDomainAsStore() {
+    if (!ecwidStoreUrl) return true;
+    try { return new URL(ecwidStoreUrl).hostname === window.location.hostname; }
+    catch(e) { return true; }
+  }
+
+  // Build cross-domain cart URL (strips /products, uses /cart)
+  function buildCrossCartUrl(registry) {
     if (!ecwidStoreUrl) return null;
-    var sep = ecwidStoreUrl.indexOf('?') !== -1 ? '&' : '?';
-    return ecwidStoreUrl + sep + buildRegParam(registry);
+    var base = ecwidStoreUrl.replace(/\\/products\\/?$/, '').replace(/\\/+$/, '');
+    return base + '/cart?' + buildRegParam(registry);
+  }
+
+  // Navigate to cart — same domain uses Ecwid API, cross domain uses URL
+  function goToCart(registry) {
+    if (isSameDomainAsStore() && window.Ecwid && Ecwid.openPage) {
+      Ecwid.openPage('cart');
+    } else {
+      var url = buildCrossCartUrl(registry);
+      if (url) window.location.href = url;
+    }
   }
 
   // ── Sticky "Go to Cart" bar at bottom of registry detail ──
   function showCartBar(registry, container) {
     if (container.querySelector('#reg-cart-bar')) return;
-    var cartUrl = buildStoreCartUrl(registry);
-    if (!cartUrl) return;
     var bar = document.createElement('div');
     bar.id = 'reg-cart-bar';
     bar.style.cssText = 'position:sticky;bottom:0;background:#2a6e3f;color:#fff;padding:12px 16px;border-radius:5px 5px 0 0;margin-top:16px;text-align:center;font-family:DM Sans,sans-serif;font-size:0.95em;z-index:100;';
-    bar.innerHTML = 'Ready to check out? <a href="' + esc(cartUrl) + '" style="color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;">Go to Cart \\u2192</a>';
+    var link = document.createElement('a');
+    link.href = '#';
+    link.style.cssText = 'color:#fff;text-decoration:underline;font-weight:600;margin-left:8px;';
+    link.textContent = 'Go to Cart \\u2192';
+    link.onclick = function(e) { e.preventDefault(); goToCart(registry); };
+    bar.appendChild(document.createTextNode('Ready to check out? '));
+    bar.appendChild(link);
     container.appendChild(bar);
   }
 
@@ -1819,14 +1848,12 @@ app.get("/widget/registry.js", (req, res) => {
     msg.innerHTML = '\\uD83C\\uDF81 Shopping for <strong>' + esc(registry.display_name) + '</strong>';
     bar.appendChild(msg);
 
-    var cartUrl = buildStoreCartUrl(registry);
-    if (cartUrl) {
-      var link = document.createElement('a');
-      link.href = cartUrl;
-      link.textContent = 'Go to Cart \\u2192';
-      link.style.cssText = 'color:#2a6e3f;font-size:0.85em;text-decoration:underline;white-space:nowrap;flex-shrink:0;';
-      bar.appendChild(link);
-    }
+    var link = document.createElement('a');
+    link.href = '#';
+    link.textContent = 'Go to Cart \\u2192';
+    link.style.cssText = 'color:#2a6e3f;font-size:0.85em;text-decoration:underline;white-space:nowrap;flex-shrink:0;';
+    link.onclick = function(e) { e.preventDefault(); goToCart(registry); };
+    bar.appendChild(link);
 
     var itemsEl = container.querySelector('.reg-items');
     if (itemsEl) container.insertBefore(bar, itemsEl);
@@ -2113,11 +2140,11 @@ app.get("/widget/registry.js", (req, res) => {
                 if (settled) return;
                 settled = true;
                 if (ok) {
-                  var cartUrl = buildStoreCartUrl(registry);
-                  var extra = cartUrl
-                    ? ' <a href="' + esc(cartUrl) + '" style="color:#2a6e3f;text-decoration:underline;font-weight:500;">Go to Cart \\u2192</a>'
-                    : '';
-                  setStatus((message || 'Added to cart.') + extra, false);
+                  setStatus((message || 'Added to cart.') + ' <a href="#" id="reg-go-cart-link" style="color:#2a6e3f;text-decoration:underline;font-weight:500;">Go to Cart \\u2192</a>', false);
+                  setTimeout(function(){
+                    var lnk = document.getElementById('reg-go-cart-link');
+                    if (lnk) lnk.onclick = function(e){ e.preventDefault(); goToCart(registry); };
+                  }, 0);
                   showCartBar(registry, container);
                 } else {
                   setStatus(message || 'Failed to add to cart.', true);
