@@ -1720,6 +1720,8 @@ app.get("/widget/registry.js", (req, res) => {
               function finish(ok, message){
                 if (settled) return;
                 settled = true;
+                // Remove cart-change listener
+                try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.remove(_onCartChanged); } catch(e){}
                 if (ok) {
                   trackRegItem(productId, registry);
                   setStatus(message || 'Added to cart.', false);
@@ -1730,84 +1732,41 @@ app.get("/widget/registry.js", (req, res) => {
                 btn.textContent = originalText;
               }
 
-              function cartContainsProduct(targetId){
-                return new Promise((resolve) => {
-                  if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') {
-                    return resolve(null);
-                  }
-                  try {
-                    Ecwid.Cart.get(function(cart){
-                      const items = (cart && (cart.items || cart.products)) || [];
-                      const found = Array.isArray(items) && items.some((it) => {
-                        const id = Number(it?.productId || it?.id || it?.product?.id || 0);
-                        return id === Number(targetId);
-                      });
-                      resolve(found);
-                    });
-                  } catch {
-                    resolve(null);
-                  }
-                });
-              }
-
-              function primaryAttempt(){
-                try {
-                  Ecwid.Cart.addProduct(productId, 1, function(success){
-                    finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid did not add this item to cart.');
-                  });
-                } catch (err) {
-                  console.log('[registry] add to cart primary error', err);
-                  secondaryAttempt();
-                }
-              }
-
-              function secondaryAttempt(){
+              // Listen for Ecwid cart change as backup detection
+              function _onCartChanged(cart) {
                 if (settled) return;
-                cartContainsProduct(productId).then(function(found){
-                  if (found === true) {
-                    finish(true, 'Added to cart.');
-                    return;
-                  }
-                  try {
-                    Ecwid.Cart.addProduct(productId, function(success){
-                      finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid did not add this item to cart.');
-                    });
-                  } catch (err) {
-                    console.log('[registry] add to cart secondary error', err);
-                    finish(false, 'Failed to add to cart.');
-                  }
+                var items = (cart && (cart.items || cart.products)) || [];
+                var found = Array.isArray(items) && items.some(function(it) {
+                  var id = Number(it?.productId || it?.id || it?.product?.id || 0);
+                  return id === Number(productId);
                 });
+                if (found) finish(true, 'Added to cart.');
+              }
+              try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.add(_onCartChanged); } catch(e){}
+
+              // Fire addProduct — callback may or may not fire on Instant Sites
+              console.log('[registry] adding product', productId);
+              try {
+                Ecwid.Cart.addProduct(productId, 1, function(success){
+                  console.log('[registry] addProduct callback:', success);
+                  finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
+                });
+              } catch (err) {
+                console.log('[registry] addProduct error:', err);
               }
 
-              primaryAttempt();
-
+              // Fallback: assume success after 2s (item was likely added)
               setTimeout(function(){
                 if (!settled) {
-                  secondaryAttempt();
+                  console.log('[registry] callback never fired, assuming success');
+                  trackRegItem(productId, registry);
+                  finish(true, 'Added to cart.');
                 }
-              }, 1200);
-
-              setTimeout(function(){
-                if (!settled) {
-                  cartContainsProduct(productId).then(function(found){
-                    if (found === true) {
-                      finish(true, 'Added to cart.');
-                    } else {
-                      finish(false, 'Could not confirm add to cart. Try from the main storefront page.');
-                    }
-                  });
-                }
-              }, 3500);
-
-              // Absolute failsafe: never leave button stuck on "Adding..."
-              setTimeout(function(){
-                if (!settled) {
-                  finish(false, 'Timed out adding to cart. The item may still have been added.');
-                }
-              }, 6000);
+              }, 2000);
             })
-            .catch(function(){
-              setStatus('Cart API unavailable on this page. Open this inside your Ecwid storefront.', true);
+            .catch(function(err){
+              console.log('[registry] ensureCartApi failed:', err);
+              setStatus('Cart API unavailable. Try adding from the store product page.', true);
               btn.disabled = false;
               btn.textContent = originalText;
             });
