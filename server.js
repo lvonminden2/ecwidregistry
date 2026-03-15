@@ -1810,10 +1810,10 @@ app.get("/widget/registry.js", (req, res) => {
     return base + '/cart?' + buildRegParam(registry);
   }
 
-  // Navigate to cart — same domain uses Ecwid API, cross domain uses URL
+  // Navigate to cart — same domain goes to /cart, cross domain passes context via URL
   function goToCart(registry) {
-    if (isSameDomainAsStore() && window.Ecwid && Ecwid.openPage) {
-      Ecwid.openPage('cart');
+    if (isSameDomainAsStore()) {
+      window.location.href = '/cart';
     } else {
       var url = buildCrossCartUrl(registry);
       if (url) window.location.href = url;
