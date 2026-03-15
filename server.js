@@ -1798,6 +1798,13 @@ app.get("/widget/registry.js", (req, res) => {
                   });
                 }
               }, 3500);
+
+              // Absolute failsafe: never leave button stuck on "Adding..."
+              setTimeout(function(){
+                if (!settled) {
+                  finish(false, 'Timed out adding to cart. The item may still have been added.');
+                }
+              }, 6000);
             })
             .catch(function(){
               setStatus('Cart API unavailable on this page. Open this inside your Ecwid storefront.', true);
