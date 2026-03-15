@@ -1341,51 +1341,17 @@ app.get("/widget/cart.js", (req, res) => {
     });
   }
 
-  // ── Page tracking ──
-  var _cartPages = ['CART','CHECKOUT_ADDRESS','CHECKOUT_PAYMENT','CHECKOUT_PLACE_ORDER',
-                    'ORDER_CONFIRMATION','MY_ORDERS','ORDER_DETAILS'];
-  var _currentPageType = '';
-
-  function onPage(page) {
-    _currentPageType = page ? (page.type || '') : '';
-    if (page && _cartPages.indexOf(page.type) !== -1) {
-      setTimeout(function() { labelItems(); showDisclaimer(); }, 600);
-      if (window.MutationObserver) {
-        var obs = new MutationObserver(function() { labelItems(); });
-        var el = document.getElementById('ecwid-store') || document.body;
-        obs.observe(el, { childList: true, subtree: true });
-        setTimeout(function() { obs.disconnect(); }, 10000);
-      }
-    } else {
-      // Not on cart page — remove disclaimer if present
-      var d = document.getElementById('_reg-disclaimer');
-      if (d && d.parentNode) d.parentNode.removeChild(d);
-    }
-  }
-
-  // ── Hook into Ecwid API ──
-  function hookAll() {
-    if (window.Ecwid && Ecwid.OnPageLoad) Ecwid.OnPageLoad.add(onPage);
-  }
-  if (window.Ecwid && Ecwid.OnAPILoaded) {
-    Ecwid.OnAPILoaded.add(hookAll);
-  } else {
-    var _w = setInterval(function() {
-      if (window.Ecwid && Ecwid.OnAPILoaded) {
-        clearInterval(_w);
-        Ecwid.OnAPILoaded.add(hookAll);
-        hookAll();
-      }
-    }, 300);
-  }
-
-  // ── Polling: re-label items on cart pages every 2s ──
+  // ── Run labeling + disclaimer on every tick ──
+  // No page-type gating — the DOM selectors only match on cart pages anyway,
+  // and Ecwid.Cart.get returns empty on non-cart contexts. This avoids the
+  // race where OnPageLoad fires before cart.js registers its handler.
   setInterval(function() {
-    if (_cartPages.indexOf(_currentPageType) !== -1) {
-      labelItems();
-      showDisclaimer();
-    }
+    labelItems();
+    showDisclaimer();
   }, 2000);
+
+  // Also run once on startup after a short delay
+  setTimeout(function() { labelItems(); showDisclaimer(); }, 1000);
 })();
 `);
 });
