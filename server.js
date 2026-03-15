@@ -1311,58 +1311,61 @@ app.get("/widget/cart.js", (req, res) => {
       });
       if (!Object.keys(nameToReg).length) return;
 
-      // Debug: log once so we can diagnose selector issues
-      if (!_labelDebugOnce) {
-        _labelDebugOnce = true;
-        console.log('[registry-cart] Looking for names:', Object.keys(nameToReg));
-        _nameSelectors.forEach(function(sel) {
-          var found = document.querySelectorAll(sel);
-          if (found.length) console.log('[registry-cart] Selector "' + sel + '" matched', found.length, 'elements');
-        });
-      }
+      // Track which names already have a visible badge (prevents duplicates)
+      var alreadyLabeled = {};
+      document.querySelectorAll('.reg-cart-badge').forEach(function(badge) {
+        var parent = badge.parentElement;
+        if (parent) {
+          // Get parent text without the badge text
+          var clone = parent.cloneNode(true);
+          clone.querySelectorAll('.reg-cart-badge').forEach(function(b) { b.remove(); });
+          var parentText = (clone.textContent || '').trim();
+          if (parentText) alreadyLabeled[parentText] = true;
+        }
+      });
+
+      // For each product name, find exactly ONE element to badge (first match wins)
+      var namesNeeded = {};
+      Object.keys(nameToReg).forEach(function(n) {
+        if (!alreadyLabeled[n]) namesNeeded[n] = nameToReg[n];
+      });
+      if (!Object.keys(namesNeeded).length) return;
 
       // Phase 1: Try specific selectors
-      var labeled = 0;
       _nameSelectors.forEach(function(sel) {
         document.querySelectorAll(sel).forEach(function(el) {
+          if (el.getAttribute('data-reg-labeled')) return;
           var text = (el.textContent || '').trim();
           if (!text) return;
-          var regName = matchesName(text, nameToReg);
-          if (regName && addBadge(el, regName)) labeled++;
+          var regName = matchesName(text, namesNeeded);
+          if (regName && addBadge(el, regName)) {
+            // Remove from namesNeeded so we don't badge this name again
+            Object.keys(namesNeeded).forEach(function(n) {
+              if (text === n || text.startsWith(n)) delete namesNeeded[n];
+            });
+          }
         });
       });
 
-      // Phase 2: Fallback — scan all links and text elements in the store container
-      // for exact product name matches (broader search if specific selectors miss)
-      if (labeled === 0) {
+      // Phase 2: Fallback — scan elements for remaining unmatched names
+      if (Object.keys(namesNeeded).length > 0) {
         var storeEl = findStoreEl();
         var searchRoot = storeEl || document.body;
         var candidates = searchRoot.querySelectorAll('a, span, div, p, h1, h2, h3, h4, h5, h6, td, li');
         candidates.forEach(function(el) {
-          // Skip elements that are too large (containers) — only target leaf-ish elements
+          if (!Object.keys(namesNeeded).length) return;
           if (el.children.length > 3) return;
+          if (el.getAttribute('data-reg-labeled')) return;
           var text = (el.textContent || '').trim();
           if (!text || text.length > 200) return;
-          var regName = matchesName(text, nameToReg);
+          var regName = matchesName(text, namesNeeded);
           if (!regName) return;
-          // Only badge if this element directly contains the text (not a distant parent)
-          var direct = false;
-          for (var i = 0; i < el.childNodes.length; i++) {
-            if (el.childNodes[i].nodeType === 3 && (el.childNodes[i].textContent || '').trim() === text) {
-              direct = true;
-              break;
-            }
-          }
-          // Also accept if the element has few children and text matches
-          if (!direct && el.children.length <= 1) direct = true;
-          if (direct && addBadge(el, regName)) {
-            labeled++;
-            console.log('[registry-cart] Fallback badge on:', el.tagName, el.className);
+          if (addBadge(el, regName)) {
+            Object.keys(namesNeeded).forEach(function(n) {
+              if (text === n || text.startsWith(n)) delete namesNeeded[n];
+            });
           }
         });
-        if (labeled > 0) {
-          console.log('[registry-cart] Labeled', labeled, 'items via fallback scan');
-        }
       }
     });
   }
