@@ -1025,6 +1025,18 @@ async function processEcwidOrder(order) {
     ? Number(registryIdField.value || registryIdField.text || registryIdField.valueText)
     : null;
 
+  // Parse per-item registry allocations from cart.js (v8+)
+  // Format: { "productId": [{ rid: number, qty: number }] }
+  let registryAllocations = null;
+  const registryDataField = extraFields.find(
+    (f) => f.key === "registry_data" || f.fieldKey === "registry_data" || f.id === "registry_data" || f.name === "registry_data"
+  );
+  if (registryDataField) {
+    try {
+      registryAllocations = JSON.parse(registryDataField.value || registryDataField.text || registryDataField.valueText || '{}');
+    } catch(e) { /* ignore parse errors */ }
+  }
+
   const orderItems = Array.isArray(order.items) ? order.items : [];
   if (!orderItems.length) return { recorded: 0, error: "no items" };
 
@@ -1050,12 +1062,20 @@ async function processEcwidOrder(order) {
         .get(orderNumber, productId, registryId);
       if (dup) continue;
 
+      // Use per-item registry allocation qty if available (from cart.js v8+),
+      // otherwise fall back to the full order line item quantity
+      let recordQty = Number(item.quantity || 1);
+      if (registryAllocations && registryAllocations[String(productId)]) {
+        const alloc = registryAllocations[String(productId)].find(a => a.rid === registryId);
+        if (alloc && alloc.qty > 0) recordQty = alloc.qty;
+      }
+
       db.prepare(
         "INSERT INTO registry_purchase (registry_id, product_id, product_name, product_sku, qty, buyer_name, buyer_email, notes, off_registry, channel, order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(
         registryId, productId,
         item.name || null, item.sku || null,
-        Number(item.quantity || 1),
+        recordQty,
         order.billingPerson?.name || order.shippingPerson?.name || null,
         order.email || null,
         null, 0, "online", orderNumber
@@ -1226,7 +1246,7 @@ if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHO
 // ─── Lightweight storefront cart script ──────────────────────────────────────
 // Per-item registry labeling for Ecwid cart pages.
 // Reads _reg_items from localStorage (written by registry.js when items are added).
-// Labels individual cart items with their registry name and shows a disclaimer.
+// Shows a Registry Summary Panel above the cart and passes registry data to checkout.
 // Usage: <script src="https://your-app/widget/cart.js"></script>
 app.get("/widget/cart.js", (req, res) => {
   res.type("application/javascript");
@@ -1234,7 +1254,7 @@ app.get("/widget/cart.js", (req, res) => {
   res.set("Pragma", "no-cache");
   res.send(`
 (function(){
-  console.log('[registry-cart] v7 loaded');
+  console.log('[registry-cart] v8 loaded');
 
   // ── HTML escaper ──
   function esc(s) {
@@ -1251,168 +1271,172 @@ app.get("/widget/cart.js", (req, res) => {
   }
 
   // ── Read per-item registry map from localStorage ──
-  // Format: { "productId": { rid: number, name: "Registry Name" }, ... }
+  // New format: { "productId": [{ rid, name, qty }] }
+  // Old format: { "productId": { rid, name } } — auto-normalized
   function getRegItems() {
     try {
-      return JSON.parse(localStorage.getItem('_reg_items') || '{}');
+      var raw = JSON.parse(localStorage.getItem('_reg_items') || '{}');
+      // Normalize: convert old single-object format to array format
+      var normalized = {};
+      Object.keys(raw).forEach(function(pid) {
+        var val = raw[pid];
+        if (Array.isArray(val)) {
+          normalized[pid] = val;
+        } else if (val && typeof val === 'object') {
+          normalized[pid] = [{ rid: val.rid, name: val.name, qty: val.qty || 1 }];
+        }
+      });
+      return normalized;
     } catch(e) { return {}; }
   }
 
-  // ── Per-item badge injection ──
-  // Specific selectors for known Ecwid cart item name elements
-  var _nameSelectors = [
-    '[data-hook="product-title"]',
-    '[data-hook="cart-item-title"]',
-    '.ec-cart-item__name',
-    '.ec-cart-item .ec-cart-item__title',
-    '[class*="cart-item"] [class*="title"]',
-    '[class*="cart-item"] [class*="name"]',
-    '[class*="cartProduct"] [class*="title"]',
-    '[class*="cartProduct"] [class*="name"]'
-  ];
-
-  var _labelDebugOnce = false;
-
-  function addBadge(el, regName) {
-    if (el.getAttribute('data-reg-labeled')) return false;
-    el.setAttribute('data-reg-labeled', '1');
-    var badge = document.createElement('span');
-    badge.className = 'reg-cart-badge';
-    badge.textContent = '\\uD83C\\uDF81 ' + regName;
-    badge.style.cssText = 'display:inline-block;margin-left:8px;padding:2px 7px;background:#f0f4f0;border:1px solid #c8d8c8;border-radius:3px;font-size:0.8em;color:#2a6e3f;font-weight:500;white-space:nowrap;';
-    el.appendChild(badge);
-    return true;
-  }
-
-  function matchesName(text, nameToReg) {
-    var result = null;
-    Object.keys(nameToReg).forEach(function(n) {
-      if (text === n || text.startsWith(n)) result = nameToReg[n];
+  // ── Build grouped registry data from cart + localStorage ──
+  function buildRegistryGroups(regItems, cartItems) {
+    // Map product ID → cart item info (name, cart qty)
+    var cartMap = {};
+    cartItems.forEach(function(it) {
+      var product = (it && it.product) || it;
+      var pid = String((product && product.id) || it.productId || 0);
+      var name = (product && product.name) || it.name || '';
+      var qty = Number(it.quantity || (product && product.quantity) || 1);
+      if (pid !== '0') cartMap[pid] = { name: name, cartQty: qty };
     });
-    return result;
+
+    // Group by registry: { registryName: [{ pid, name, regQty, cartQty }] }
+    var groups = {};
+    Object.keys(regItems).forEach(function(pid) {
+      if (!cartMap[pid]) return; // not in cart, skip
+      var entries = regItems[pid];
+      entries.forEach(function(entry) {
+        var regName = entry.name || 'Gift Registry';
+        if (!groups[regName]) groups[regName] = [];
+        var regQty = Math.min(entry.qty || 1, cartMap[pid].cartQty);
+        groups[regName].push({
+          pid: pid,
+          name: cartMap[pid].name,
+          regQty: regQty,
+          cartQty: cartMap[pid].cartQty
+        });
+      });
+    });
+    return groups;
   }
 
-  function labelItems() {
+  // ── Registry Summary Panel ──
+  var _panelId = '_reg-summary';
+
+  function showRegistrySummary() {
+    var regItems = getRegItems();
+    if (!Object.keys(regItems).length) {
+      removePanel();
+      return;
+    }
+    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+
+    Ecwid.Cart.get(function(cart) {
+      var cartItems = (cart && cart.items) || [];
+      if (!Array.isArray(cartItems) || !cartItems.length) {
+        removePanel();
+        return;
+      }
+
+      var groups = buildRegistryGroups(regItems, cartItems);
+      var registryNames = Object.keys(groups);
+      if (!registryNames.length) {
+        removePanel();
+        return;
+      }
+
+      // Build panel HTML
+      var html = '<div style="font-family:sans-serif;font-size:15px;font-weight:600;margin-bottom:10px;">\\uD83C\\uDF81 Gift Registry Purchases</div>';
+      registryNames.forEach(function(regName) {
+        html += '<div style="margin-bottom:8px;">';
+        html += '<div style="font-weight:600;font-size:14px;color:#333;margin-bottom:4px;">' + esc(regName) + '</div>';
+        html += '<ul style="margin:0 0 0 8px;padding:0;list-style:none;">';
+        groups[regName].forEach(function(item) {
+          html += '<li style="padding:2px 0;font-size:13px;color:#444;">';
+          html += '\\u2022 ' + esc(item.name);
+          html += ' <span style="color:#666;">\\u00D7' + item.regQty + '</span>';
+          if (item.cartQty > item.regQty) {
+            html += ' <span style="font-size:11px;color:#888;">(' + item.regQty + ' of ' + item.cartQty + ' in cart)</span>';
+          }
+          html += '</li>';
+        });
+        html += '</ul></div>';
+      });
+      html += '<div style="font-size:12px;color:#666;margin-top:6px;border-top:1px solid #d8e8d8;padding-top:6px;">These items will be recorded as purchased on their registries upon checkout.</div>';
+
+      var existing = document.getElementById(_panelId);
+      if (existing) {
+        existing.innerHTML = html;
+      } else {
+        var box = document.createElement('div');
+        box.id = _panelId;
+        box.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:6px;padding:14px 18px;margin:0 0 16px;';
+        box.innerHTML = html;
+        var storeEl = findStoreEl();
+        if (storeEl && storeEl.parentNode) {
+          storeEl.parentNode.insertBefore(box, storeEl);
+        }
+      }
+    });
+  }
+
+  function removePanel() {
+    var el = document.getElementById(_panelId);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // ── Pass registry data to checkout via ec.order.extraFields ──
+  function setRegistryExtraFields() {
     var regItems = getRegItems();
     if (!Object.keys(regItems).length) return;
     if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+
     Ecwid.Cart.get(function(cart) {
       var cartItems = (cart && cart.items) || [];
-      if (!Array.isArray(cartItems) || !cartItems.length) return;
-      // Build map of product name → registry name for items in cart
-      var nameToReg = {};
+      // Build compact data: { "productId": [{ rid, qty }] }
+      var data = {};
+      var cartMap = {};
       cartItems.forEach(function(it) {
         var product = (it && it.product) || it;
         var pid = String((product && product.id) || it.productId || 0);
-        var name = (product && product.name) || it.name || '';
-        if (regItems[pid] && name) {
-          nameToReg[name] = regItems[pid].name || 'Gift Registry';
-        }
-      });
-      if (!Object.keys(nameToReg).length) return;
-
-      // Track which names already have a visible badge (prevents duplicates)
-      var alreadyLabeled = {};
-      document.querySelectorAll('.reg-cart-badge').forEach(function(badge) {
-        var parent = badge.parentElement;
-        if (parent) {
-          // Get parent text without the badge text
-          var clone = parent.cloneNode(true);
-          clone.querySelectorAll('.reg-cart-badge').forEach(function(b) { b.remove(); });
-          var parentText = (clone.textContent || '').trim();
-          if (parentText) alreadyLabeled[parentText] = true;
-        }
+        var qty = Number(it.quantity || (product && product.quantity) || 1);
+        if (pid !== '0') cartMap[pid] = qty;
       });
 
-      // For each product name, find exactly ONE element to badge (first match wins)
-      var namesNeeded = {};
-      Object.keys(nameToReg).forEach(function(n) {
-        if (!alreadyLabeled[n]) namesNeeded[n] = nameToReg[n];
-      });
-      if (!Object.keys(namesNeeded).length) return;
-
-      // Phase 1: Try specific selectors
-      _nameSelectors.forEach(function(sel) {
-        document.querySelectorAll(sel).forEach(function(el) {
-          if (el.getAttribute('data-reg-labeled')) return;
-          var text = (el.textContent || '').trim();
-          if (!text) return;
-          var regName = matchesName(text, namesNeeded);
-          if (regName && addBadge(el, regName)) {
-            // Remove from namesNeeded so we don't badge this name again
-            Object.keys(namesNeeded).forEach(function(n) {
-              if (text === n || text.startsWith(n)) delete namesNeeded[n];
-            });
-          }
+      Object.keys(regItems).forEach(function(pid) {
+        if (!cartMap[pid]) return;
+        var entries = regItems[pid];
+        data[pid] = entries.map(function(e) {
+          return { rid: e.rid, qty: Math.min(e.qty || 1, cartMap[pid]) };
         });
       });
 
-      // Phase 2: Fallback — scan elements for remaining unmatched names
-      if (Object.keys(namesNeeded).length > 0) {
-        var storeEl = findStoreEl();
-        var searchRoot = storeEl || document.body;
-        var candidates = searchRoot.querySelectorAll('a, span, div, p, h1, h2, h3, h4, h5, h6, td, li');
-        candidates.forEach(function(el) {
-          if (!Object.keys(namesNeeded).length) return;
-          if (el.children.length > 3) return;
-          if (el.getAttribute('data-reg-labeled')) return;
-          var text = (el.textContent || '').trim();
-          if (!text || text.length > 200) return;
-          var regName = matchesName(text, namesNeeded);
-          if (!regName) return;
-          if (addBadge(el, regName)) {
-            Object.keys(namesNeeded).forEach(function(n) {
-              if (text === n || text.startsWith(n)) delete namesNeeded[n];
-            });
-          }
-        });
-      }
+      if (!Object.keys(data).length) return;
+
+      window.ec = window.ec || {};
+      ec.order = ec.order || {};
+      ec.order.extraFields = ec.order.extraFields || {};
+      ec.order.extraFields.registry_data = {
+        title: '',
+        value: JSON.stringify(data),
+        type: 'text',
+        orderDetailsDisplaySection: 'hidden'
+      };
     });
   }
 
-  // ── Disclaimer shown on cart/checkout pages when registry items are present ──
-  function showDisclaimer() {
-    var regItems = getRegItems();
-    var el = document.getElementById('_reg-disclaimer');
-    if (!Object.keys(regItems).length) {
-      if (el && el.parentNode) el.parentNode.removeChild(el);
-      return;
-    }
-    // Check if any registry items are actually in the cart
-    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
-    Ecwid.Cart.get(function(cart) {
-      var cartItems = (cart && cart.items) || [];
-      var hasRegItem = cartItems.some(function(it) {
-        var product = (it && it.product) || it;
-        var pid = String((product && product.id) || it.productId || 0);
-        return !!regItems[pid];
-      });
-      var existing = document.getElementById('_reg-disclaimer');
-      if (!hasRegItem) {
-        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
-        return;
-      }
-      if (existing) return; // already showing
-      var box = document.createElement('div');
-      box.id = '_reg-disclaimer';
-      box.style.cssText = 'background:#f0f7f0;border:1px solid #b8d8b8;border-radius:5px;padding:10px 16px;margin:0 0 12px;font-size:0.9em;color:#2a6e3f;font-family:sans-serif;';
-      box.innerHTML = '\\uD83C\\uDF81 Items marked with \\uD83C\\uDF81 are gift registry purchases. These will be recorded as purchased on their respective registries upon checkout.';
-      var storeEl = findStoreEl();
-      if (storeEl && storeEl.parentNode) storeEl.parentNode.insertBefore(box, storeEl);
-    });
-  }
-
-  // ── Run labeling + disclaimer on every tick ──
-  // No page-type gating — the DOM selectors only match on cart pages anyway,
-  // and Ecwid.Cart.get returns empty on non-cart contexts. This avoids the
-  // race where OnPageLoad fires before cart.js registers its handler.
+  // ── Run summary + extraFields on every tick ──
   setInterval(function() {
-    labelItems();
-    showDisclaimer();
+    showRegistrySummary();
+    setRegistryExtraFields();
   }, 2000);
 
-  // Also run once on startup after a short delay
-  setTimeout(function() { labelItems(); showDisclaimer(); }, 1000);
+  setTimeout(function() {
+    showRegistrySummary();
+    setRegistryExtraFields();
+  }, 1000);
 })();
 `);
 });
@@ -1504,11 +1528,31 @@ app.get("/widget/registry.js", (req, res) => {
 
   // ── Per-item registry tracking ──
   // When an item is added to cart from a registry page, store the mapping
-  // in localStorage so cart.js can label it in the cart.
+  // in localStorage so cart.js can show the registry summary panel.
+  // Format: { "productId": [{ rid: number, name: "Registry Name", qty: number }] }
   function trackRegItem(productId, registry) {
     try {
       var regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}');
-      regItems[String(productId)] = { rid: registry.id, name: registry.display_name };
+      var pid = String(productId);
+      var entries = regItems[pid];
+      // Normalize old format (single object → array)
+      if (entries && !Array.isArray(entries)) {
+        entries = [{ rid: entries.rid, name: entries.name, qty: 1 }];
+      }
+      if (!Array.isArray(entries)) entries = [];
+      // Find existing entry for this registry
+      var found = false;
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].rid === registry.id) {
+          entries[i].qty = (entries[i].qty || 1) + 1;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        entries.push({ rid: registry.id, name: registry.display_name, qty: 1 });
+      }
+      regItems[pid] = entries;
       localStorage.setItem('_reg_items', JSON.stringify(regItems));
     } catch(e) {}
   }
