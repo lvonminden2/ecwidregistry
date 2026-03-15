@@ -1234,7 +1234,7 @@ app.get("/widget/cart.js", (req, res) => {
   res.set("Pragma", "no-cache");
   res.send(`
 (function(){
-  console.log('[registry-cart] v6 loaded');
+  console.log('[registry-cart] v7 loaded');
 
   // ── HTML escaper ──
   function esc(s) {
@@ -1259,6 +1259,7 @@ app.get("/widget/cart.js", (req, res) => {
   }
 
   // ── Per-item badge injection ──
+  // Specific selectors for known Ecwid cart item name elements
   var _nameSelectors = [
     '[data-hook="product-title"]',
     '[data-hook="cart-item-title"]',
@@ -1269,6 +1270,27 @@ app.get("/widget/cart.js", (req, res) => {
     '[class*="cartProduct"] [class*="title"]',
     '[class*="cartProduct"] [class*="name"]'
   ];
+
+  var _labelDebugOnce = false;
+
+  function addBadge(el, regName) {
+    if (el.getAttribute('data-reg-labeled')) return false;
+    el.setAttribute('data-reg-labeled', '1');
+    var badge = document.createElement('span');
+    badge.className = 'reg-cart-badge';
+    badge.textContent = '\\uD83C\\uDF81 ' + regName;
+    badge.style.cssText = 'display:inline-block;margin-left:8px;padding:2px 7px;background:#f0f4f0;border:1px solid #c8d8c8;border-radius:3px;font-size:0.8em;color:#2a6e3f;font-weight:500;white-space:nowrap;';
+    el.appendChild(badge);
+    return true;
+  }
+
+  function matchesName(text, nameToReg) {
+    var result = null;
+    Object.keys(nameToReg).forEach(function(n) {
+      if (text === n || text.startsWith(n)) result = nameToReg[n];
+    });
+    return result;
+  }
 
   function labelItems() {
     var regItems = getRegItems();
@@ -1288,24 +1310,60 @@ app.get("/widget/cart.js", (req, res) => {
         }
       });
       if (!Object.keys(nameToReg).length) return;
+
+      // Debug: log once so we can diagnose selector issues
+      if (!_labelDebugOnce) {
+        _labelDebugOnce = true;
+        console.log('[registry-cart] Looking for names:', Object.keys(nameToReg));
+        _nameSelectors.forEach(function(sel) {
+          var found = document.querySelectorAll(sel);
+          if (found.length) console.log('[registry-cart] Selector "' + sel + '" matched', found.length, 'elements');
+        });
+      }
+
+      // Phase 1: Try specific selectors
+      var labeled = 0;
       _nameSelectors.forEach(function(sel) {
         document.querySelectorAll(sel).forEach(function(el) {
-          if (el.getAttribute('data-reg-labeled')) return;
           var text = (el.textContent || '').trim();
           if (!text) return;
-          var regName = null;
-          Object.keys(nameToReg).forEach(function(n) {
-            if (text === n || text.startsWith(n)) regName = nameToReg[n];
-          });
-          if (!regName) return;
-          el.setAttribute('data-reg-labeled', '1');
-          var badge = document.createElement('span');
-          badge.className = 'reg-cart-badge';
-          badge.textContent = '\\uD83C\\uDF81 ' + regName;
-          badge.style.cssText = 'display:inline-block;margin-left:8px;padding:2px 7px;background:#f0f4f0;border:1px solid #c8d8c8;border-radius:3px;font-size:0.8em;color:#2a6e3f;font-weight:500;white-space:nowrap;';
-          el.appendChild(badge);
+          var regName = matchesName(text, nameToReg);
+          if (regName && addBadge(el, regName)) labeled++;
         });
       });
+
+      // Phase 2: Fallback — scan all links and text elements in the store container
+      // for exact product name matches (broader search if specific selectors miss)
+      if (labeled === 0) {
+        var storeEl = findStoreEl();
+        var searchRoot = storeEl || document.body;
+        var candidates = searchRoot.querySelectorAll('a, span, div, p, h1, h2, h3, h4, h5, h6, td, li');
+        candidates.forEach(function(el) {
+          // Skip elements that are too large (containers) — only target leaf-ish elements
+          if (el.children.length > 3) return;
+          var text = (el.textContent || '').trim();
+          if (!text || text.length > 200) return;
+          var regName = matchesName(text, nameToReg);
+          if (!regName) return;
+          // Only badge if this element directly contains the text (not a distant parent)
+          var direct = false;
+          for (var i = 0; i < el.childNodes.length; i++) {
+            if (el.childNodes[i].nodeType === 3 && (el.childNodes[i].textContent || '').trim() === text) {
+              direct = true;
+              break;
+            }
+          }
+          // Also accept if the element has few children and text matches
+          if (!direct && el.children.length <= 1) direct = true;
+          if (direct && addBadge(el, regName)) {
+            labeled++;
+            console.log('[registry-cart] Fallback badge on:', el.tagName, el.className);
+          }
+        });
+        if (labeled > 0) {
+          console.log('[registry-cart] Labeled', labeled, 'items via fallback scan');
+        }
+      }
     });
   }
 
