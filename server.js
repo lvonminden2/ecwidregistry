@@ -1975,13 +1975,21 @@ app.get("/widget/registry.js", (req, res) => {
   const baseUrl = "${BASE_URL}";
   const defaultStoreId = "${LEGACY_ECWID_STORE_ID}";
 
-  // Inject store fonts if not already present
+  // Inject fallback fonts only when the page doesn't already have custom fonts
+  // loaded (i.e. when running on our own standalone /registry page, not when
+  // embedded inside a merchant's Ecwid storefront which has its own fonts).
   if (!document.querySelector('link[data-registry-fonts]')) {
-    const link = document.createElement('link');
-    link.setAttribute('data-registry-fonts', '1');
-    link.rel = 'stylesheet';
-    link.href = 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap';
-    document.head.appendChild(link);
+    var hasStorefrontFonts = document.querySelector(
+      'link[href*="fonts.googleapis"], link[href*="fonts.gstatic"], link[href*="typekit"],' +
+      'link[href*="use.typekit"], link[href*="cloud.typography"], style[data-font]'
+    );
+    if (!hasStorefrontFonts) {
+      const link = document.createElement('link');
+      link.setAttribute('data-registry-fonts', '1');
+      link.rel = 'stylesheet';
+      link.href = 'https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap';
+      document.head.appendChild(link);
+    }
   }
 
   // Inject widget styles if not already present
@@ -2164,10 +2172,95 @@ app.get("/widget/registry.js", (req, res) => {
     }
   })();
 
+  // ── Storefront theme detection ───────────────────────────────────────────
+  // Reads the host page's computed styles and applies them as CSS custom
+  // properties on the widget container, so the registry widget blends into
+  // whichever Ecwid storefront theme the merchant is using.
+  function detectTheme(container) {
+    try {
+      var bodyStyle = getComputedStyle(document.body);
+
+      // Body font & text color
+      var fontFamily = bodyStyle.fontFamily || 'sans-serif';
+      var textColor  = bodyStyle.color || '#212427';
+
+      // Heading font — prefer h1/h2, fall back to body font
+      var headingEl  = document.querySelector('h1:not([class*="reg"]), h2:not([class*="reg"])');
+      var headingFont = headingEl
+        ? getComputedStyle(headingEl).fontFamily || fontFamily
+        : fontFamily;
+
+      // Primary action color — try Ecwid's native buy/CTA buttons first
+      var btnSelectors = [
+        '.gwt-Button.btn-buy',
+        '.ec-btn.ec-btn--primary',
+        '[class*="ecwid"] .gwt-Button',
+        'button[data-hook="button-buy-now"]',
+        '.btn-primary', 'button.primary', '[class*="primary-button"]'
+      ];
+      var btnEl = null;
+      for (var si = 0; si < btnSelectors.length; si++) {
+        btnEl = document.querySelector(btnSelectors[si]);
+        if (btnEl) break;
+      }
+
+      // Fall back to first non-widget link for accent color
+      var linkEl = document.querySelector('a:not([class*="reg-"]):not([class*="registry"])');
+
+      var accentColor   = null;
+      var accentBgColor = null;
+      var btnTextColor  = '#ffffff';
+
+      if (btnEl) {
+        var bs = getComputedStyle(btnEl);
+        var bg = bs.backgroundColor;
+        // Ignore transparent/unset backgrounds
+        if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+          accentBgColor = bg;
+          btnTextColor  = bs.color || '#ffffff';
+        }
+        accentColor = accentBgColor || bs.color || null;
+      }
+      if (!accentColor && linkEl) {
+        accentColor = getComputedStyle(linkEl).color || null;
+      }
+
+      // Border color — derive a subtle border from the text color
+      var borderColor = 'rgba(0,0,0,0.12)';
+      var mutedColor  = textColor; // will be made translucent via opacity below
+
+      // Apply as CSS custom properties on the container element.
+      // Inline style properties override the stylesheet .registry-root defaults.
+      container.style.setProperty('--reg-font',         fontFamily);
+      container.style.setProperty('--reg-heading-font', headingFont);
+      container.style.setProperty('--reg-ink',          textColor);
+      container.style.setProperty('--reg-muted',        'color-mix(in srgb, ' + textColor + ' 55%, transparent)');
+      container.style.setProperty('--reg-border',       borderColor);
+      container.style.setProperty('--reg-white',        '#ffffff');
+      container.style.setProperty('--reg-card',         'rgba(0,0,0,0.03)');
+      if (accentColor)   container.style.setProperty('--reg-accent',       accentColor);
+      if (accentBgColor) container.style.setProperty('--reg-accent-light', accentBgColor);
+      container.style.setProperty('--reg-btn-text',     btnTextColor);
+
+      // Detect if the site uses squared or rounded corners from buttons/inputs
+      var firstBtn = btnEl || document.querySelector('button, input[type="submit"]');
+      if (firstBtn) {
+        var radius = getComputedStyle(firstBtn).borderRadius;
+        if (radius && radius !== '0px') {
+          container.style.setProperty('--reg-radius', radius);
+        }
+      }
+    } catch(e) {
+      // Leave CSS variable defaults in place if detection fails
+    }
+  }
+
   function mount(container){
     if (container.getAttribute('data-registry-mounted') === '1') return;
     container.setAttribute('data-registry-mounted', '1');
     container.classList.add('registry-root');
+    // Apply storefront theme to widget before first render
+    detectTheme(container);
 
     const isEmbed = container.getAttribute('data-embed') === 'true';
     const inIframe = window.self !== window.top;

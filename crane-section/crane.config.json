@@ -1,0 +1,5 @@
+{
+  "client_id":     "YOUR_ECWID_CLIENT_ID",
+  "client_secret": "YOUR_ECWID_CLIENT_SECRET",
+  "store_id":      "YOUR_ECWID_STORE_ID"
+}

@@ -256,22 +256,40 @@ textarea { resize: vertical; }
 }
 
 /* ── Public widget ───────────────────────── */
+/* ── Registry widget — theme-adaptive CSS variables ─────────────────────────
+   All --reg-* vars default to the app's own brand palette but are overridden
+   at runtime by widget/registry.js detectTheme() when embedded in a storefront.
+   ─────────────────────────────────────────────────────────────────────────── */
 .registry-root {
+  --reg-font:         var(--site-font, "DM Sans", sans-serif);
+  --reg-heading-font: var(--site-heading-font, "Prata", serif);
+  --reg-accent:       var(--accent, #820000);
+  --reg-accent-light: var(--accent-light, #a50000);
+  --reg-ink:          var(--ink, #212427);
+  --reg-muted:        var(--muted, #6b6058);
+  --reg-border:       var(--border, #e2d8d0);
+  --reg-white:        var(--white, #ffffff);
+  --reg-card:         var(--card, #F3F1F0);
+  --reg-btn-text:     #ffffff;
+  --reg-radius:       4px;
+
   background: transparent;
   padding: 28px 24px;
+  font-family: var(--reg-font);
+  color: var(--reg-ink);
 }
 
 .reg-header {
-  font-family: "Prata", serif;
+  font-family: var(--reg-heading-font);
   font-weight: 400;
   font-size: 34px;
   letter-spacing: 0.01em;
   margin-bottom: 6px;
-  color: var(--ink);
+  color: var(--reg-ink);
 }
 
 .reg-sub {
-  color: var(--muted);
+  color: var(--reg-muted);
   font-size: 12px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -285,29 +303,29 @@ textarea { resize: vertical; }
 }
 
 .reg-card {
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: 2px;
+  background: var(--reg-white);
+  border: 1px solid var(--reg-border);
+  border-radius: var(--reg-radius);
   padding: 20px;
   display: block;
   transition: box-shadow 0.15s;
 }
 
 .reg-card:hover {
-  box-shadow: 0 4px 18px rgba(130,0,0,0.07);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.08);
 }
 
 .reg-name {
-  font-family: "Prata", serif;
+  font-family: var(--reg-heading-font);
   font-weight: 400;
   font-size: 17px;
   margin-bottom: 6px;
-  color: var(--ink);
+  color: var(--reg-ink);
 }
 
 .reg-meta {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--reg-muted);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -320,9 +338,9 @@ textarea { resize: vertical; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: 2px;
+  background: var(--reg-white);
+  border: 1px solid var(--reg-border);
+  border-radius: var(--reg-radius);
   padding: 14px 16px;
 }
 
@@ -333,7 +351,7 @@ textarea { resize: vertical; }
 }
 
 .reg-item-meta {
-  color: var(--muted);
+  color: var(--reg-muted);
   font-size: 12px;
   letter-spacing: 0.03em;
 }
@@ -345,54 +363,54 @@ textarea { resize: vertical; }
   width: 100%;
   max-width: 420px;
   padding: 10px 18px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--reg-border);
   border-radius: 999px;
   font-size: 14px;
-  font-family: "DM Sans", sans-serif;
-  background: var(--white);
-  color: var(--ink);
+  font-family: var(--reg-font);
+  background: var(--reg-white);
+  color: var(--reg-ink);
   transition: border-color 0.15s;
 }
 
 .reg-search:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--reg-accent);
 }
 
 /* Widget buttons */
 .reg-btn {
-  background: var(--accent);
-  color: var(--white);
+  background: var(--reg-accent);
+  color: var(--reg-btn-text);
   border: none;
-  border-radius: 999px;
+  border-radius: var(--reg-radius);
   padding: 8px 16px;
-  font-family: "DM Sans", sans-serif;
+  font-family: var(--reg-font);
   font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s;
+  transition: opacity 0.15s;
 }
 
-.reg-btn:hover { background: var(--accent-light); }
+.reg-btn:hover { opacity: 0.85; }
 
 .reg-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .reg-back-btn {
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--ink);
-  border-radius: 999px;
+  border: 1px solid var(--reg-border);
+  color: var(--reg-ink);
+  border-radius: var(--reg-radius);
   padding: 8px 16px;
-  font-family: "DM Sans", sans-serif;
+  font-family: var(--reg-font);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
   margin-bottom: 20px;
@@ -400,8 +418,8 @@ textarea { resize: vertical; }
 }
 
 .reg-back-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--reg-accent);
+  color: var(--reg-accent);
 }
 
 .reg-status {
@@ -411,11 +429,11 @@ textarea { resize: vertical; }
 }
 
 .reg-ok { color: #2a6e3f; }
-.reg-error { color: var(--accent); }
+.reg-error { color: var(--reg-accent); }
 
 .reg-instore-note {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--reg-muted);
   font-style: italic;
   letter-spacing: 0.03em;
   white-space: nowrap;

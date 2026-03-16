@@ -1,0 +1,17 @@
+{
+  "name": "gift-registry-section",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev":    "npx @lightspeed/crane@latest dev",
+    "build":  "npx @lightspeed/crane@latest build",
+    "deploy": "npx @lightspeed/crane@latest deploy"
+  },
+  "devDependencies": {
+    "@lightspeed/crane": "latest",
+    "@lightspeed/eslint-config-crane": "latest",
+    "sass": "^1.0.0",
+    "vite": "^5.0.0",
+    "vue": "^3.4.0"
+  }
+}
