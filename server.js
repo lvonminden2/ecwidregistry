@@ -299,6 +299,14 @@ function getRegistryById(id) {
   return db.prepare("SELECT * FROM registry WHERE id = ?").get(id);
 }
 
+/** Returns the registry only if it belongs to the given store (or storeId is absent). */
+function getRegistryByIdForStore(id, storeId) {
+  if (storeId) {
+    return db.prepare("SELECT * FROM registry WHERE id = ? AND store_id = ?").get(id, storeId) || null;
+  }
+  return getRegistryById(id);
+}
+
 function getRegistryItemById(registryId, itemId) {
   return db
     .prepare("SELECT * FROM registry_item WHERE registry_id = ? AND id = ?")
@@ -578,7 +586,7 @@ app.post("/admin/registry", (req, res) => {
 
 app.get("/admin/registry/:id", async (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
   const items = getRegistryItems(registryId);
   const purchases = getRegistryPurchases(registryId);
@@ -605,7 +613,7 @@ app.get("/admin/registry/:id", async (req, res) => {
 
 app.post("/admin/registry/:id/edit", (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
   const name = String(req.body.display_name || "").trim();
   if (!name) {
@@ -622,7 +630,7 @@ app.post("/admin/registry/:id/edit", (req, res) => {
 
 app.post("/admin/registry/:id/shipping", (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
   const method = req.body.shipping_method === "ship_to_registrant" ? "ship_to_registrant" : "pickup";
   const address = method === "ship_to_registrant" ? String(req.body.shipping_address || "").trim() : null;
@@ -642,10 +650,10 @@ app.get("/admin/settings", (req, res) => {
   const storeId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || '';
   const creds = resolveStoreCredentials(storeId);
   const settings = {
-    shippingFlatRate: getShippingFlatRate(),
-    shippingFreeThreshold: getShippingFreeThreshold(),
-    publicRegistryUrl: getPublicRegistryUrl(),
-    registryPageUrl: getRegistryPageUrl(),
+    shippingFlatRate: storeId ? Number(getStoreSetting(storeId, 'shipping_flat_rate') || getShippingFlatRate()) : getShippingFlatRate(),
+    shippingFreeThreshold: storeId ? Number(getStoreSetting(storeId, 'shipping_free_threshold') || getShippingFreeThreshold()) : getShippingFreeThreshold(),
+    publicRegistryUrl: storeId ? (getStoreSetting(storeId, 'public_registry_url') || getPublicRegistryUrl()) : getPublicRegistryUrl(),
+    registryPageUrl: storeId ? (getStoreSetting(storeId, 'registry_page_url') || getRegistryPageUrl()) : getRegistryPageUrl(),
     ecwidStoreId: storeId,
     ecwidClientId: ECWID_CLIENT_ID,
     hasAccessToken: !!creds.accessToken,
@@ -681,10 +689,11 @@ app.post("/admin/settings", (req, res) => {
     return res.redirect("/admin/settings?error=" + encodeURIComponent("Free threshold must be a non-negative number."));
   }
 
-  setSetting('shipping_flat_rate', String(flatRate));
-  setSetting('shipping_free_threshold', String(freeThreshold));
-  setSetting('public_registry_url', String(public_registry_url || '').trim());
-  setSetting('registry_page_url', String(registry_page_url || '').trim());
+  const saveStoreId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || '';
+  setStoreSetting(saveStoreId, 'shipping_flat_rate', String(flatRate));
+  setStoreSetting(saveStoreId, 'shipping_free_threshold', String(freeThreshold));
+  setStoreSetting(saveStoreId, 'public_registry_url', String(public_registry_url || '').trim());
+  setStoreSetting(saveStoreId, 'registry_page_url', String(registry_page_url || '').trim());
 
   return res.redirect("/admin/settings?info=" + encodeURIComponent("Settings saved."));
 });
@@ -914,7 +923,7 @@ app.post("/admin/registry/:id/archive", (req, res) => {
 
 app.post("/admin/registry/:id/photo", (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
   const photo = String(req.body.photo_data || "").trim() || null;
   // Validate it looks like a data URL (data:image/...) or is empty (to remove)
@@ -929,7 +938,7 @@ app.post("/admin/registry/:id/photo", (req, res) => {
 
 app.get("/admin/registry/:id/print", (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
   const items = getRegistryItems(registryId);
   res.render("admin/print", { registry, items });
@@ -938,7 +947,7 @@ app.get("/admin/registry/:id/print", (req, res) => {
 // ── Registrant account management (admin) ─────────────────────────────────────
 app.post("/admin/registry/:id/account", async (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
 
   const name = String(req.body.name || "").trim() || null;
@@ -985,7 +994,7 @@ app.post("/admin/registry/:id/account", async (req, res) => {
 
 app.post("/admin/registry/:id/account/toggle-items", (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
 
   const account = db.prepare("SELECT id, can_add_items FROM registry_account WHERE registry_id = ?").get(registryId);
@@ -1003,7 +1012,7 @@ app.post("/admin/registry/:id/account/toggle-items", (req, res) => {
 
 app.post("/admin/registry/:id/account/delete", (req, res) => {
   const registryId = Number(req.params.id);
-  const registry = getRegistryById(registryId);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
 
   db.prepare("DELETE FROM registry_account WHERE registry_id = ?").run(registryId);
@@ -1429,6 +1438,7 @@ app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
   try {
     const cart = req.body?.cart || req.body;
     const items = cart?.items || [];
+    const shippingStoreId = String(req.body?.storeId || cart?.storeId || "");
 
     // Identify which items are registry pickup items
     let nonPickupSubtotal = 0;
@@ -1463,8 +1473,12 @@ app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
     }
 
     const shippingOptions = [];
-    const flatRate = getShippingFlatRate();
-    const freeThreshold = getShippingFreeThreshold();
+    const flatRate = shippingStoreId
+      ? Number(getStoreSetting(shippingStoreId, 'shipping_flat_rate') || getShippingFlatRate())
+      : getShippingFlatRate();
+    const freeThreshold = shippingStoreId
+      ? Number(getStoreSetting(shippingStoreId, 'shipping_free_threshold') || getShippingFreeThreshold())
+      : getShippingFreeThreshold();
 
     // Check free shipping threshold
     const freeShippingMet = freeThreshold > 0 && nonPickupSubtotal >= freeThreshold;
