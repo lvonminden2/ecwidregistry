@@ -1,0 +1,20 @@
+{
+  "name": "gift-registry-section",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate-config": "node generate-config.js",
+    "dev":    "node generate-config.js && npx @lightspeed/crane@latest dev",
+    "build":  "node generate-config.js && npx @lightspeed/crane@latest build",
+    "deploy": "node generate-config.js && npx @lightspeed/crane@latest deploy"
+  },
+  "devDependencies": {
+    "@lightspeed/crane": "latest",
+    "@lightspeed/eslint-config-crane": "latest",
+    "dotenv": "^16.0.0",
+    "sass": "^1.0.0",
+    "vite": "^5.0.0",
+    "vue": "^3.4.0"
+  }
+}

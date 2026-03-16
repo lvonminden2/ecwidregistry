@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.crane/
+crane.config.json
