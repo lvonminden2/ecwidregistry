@@ -1176,33 +1176,47 @@ async function processEcwidOrder(order) {
         customerNote = `🎁 This order contains gift registry items:\n${customerLines.join("\n")}\n\nItems listed above will be recorded as purchased on their registries. Thank you for your gift!`;
       }
 
-      // ── Per-item notes with registry name + shipping method ──
-      const updatedItems = orderItems.map(it => {
-        const pid = Number(it.productId);
+      // ── Build per-item detail lines for staff notes ──
+      const itemDetailLines = [];
+      for (const item of orderItems) {
+        const pid = Number(item.productId);
         const prMap = productRegistryMap.get(pid);
-        if (!prMap || prMap.length === 0) return it;
-
-        const labels = prMap.map(entry => {
+        if (!prMap || prMap.length === 0) continue;
+        const itemName = item.name || item.sku || `#${pid}`;
+        for (const entry of prMap) {
           const reg = regInfoMap.get(entry.rid);
-          if (!reg) return null;
+          if (!reg) continue;
           const shippingLabel = reg.shipping_method === "ship_to_registrant" ? "Ship to registrant" : "Pickup in store";
-          return `Gift Registry: ${reg.display_name} | ${shippingLabel}`;
-        }).filter(Boolean);
+          itemDetailLines.push(`• ${itemName} (qty ${entry.qty}) — ${reg.display_name} — ${shippingLabel}`);
+        }
+      }
+      if (itemDetailLines.length > 0) {
+        staffNote += `\n\nITEM DETAILS:\n${itemDetailLines.join("\n")}`;
+      }
 
-        const regLabel = labels.join("; ");
-        return { ...it, note: it.note ? it.note + " | " + regLabel : regLabel };
-      });
-
+      // ── PUT order-level notes to Ecwid ──
+      // (Per-item notes not supported by Ecwid API — all info goes in order-level fields)
       const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderNumber}`;
-      const putBody = { privateAdminNotes: staffNote, items: updatedItems };
+      const putBody = { privateAdminNotes: staffNote };
       if (customerNote) putBody.orderComments = customerNote;
 
-      await fetch(url, {
+      console.log(`[order] #${orderNumber} — sending PUT to ${url}`);
+      console.log(`[order] #${orderNumber} — staffNote length: ${staffNote.length}, customerNote length: ${customerNote.length}`);
+
+      const resp = await fetch(url, {
         method: "PUT",
         headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}`, "Content-Type": "application/json" },
         body: JSON.stringify(putBody)
       });
-      console.log(`[order] #${orderNumber} — annotated ${giftItemNames.length} registry item(s): ${giftItemNames.join(", ")}`);
+
+      const respText = await resp.text().catch(() => "");
+      console.log(`[order] #${orderNumber} — PUT response: ${resp.status} ${resp.statusText} — ${respText}`);
+
+      if (resp.ok) {
+        console.log(`[order] #${orderNumber} — annotated ${giftItemNames.length} registry item(s): ${giftItemNames.join(", ")}`);
+      } else {
+        console.log(`[order] #${orderNumber} — annotation PUT FAILED: ${resp.status}`);
+      }
     } catch (err) {
       console.log(`[order] #${orderNumber} — annotation error: ${err.message}`);
     }
