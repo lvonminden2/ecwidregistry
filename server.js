@@ -1292,17 +1292,17 @@ app.get("/widget/cart.js", (req, res) => {
 
   // ── Build grouped registry data from cart + localStorage ──
   function buildRegistryGroups(regItems, cartItems) {
-    // Map product ID → cart item info (name, cart qty)
+    // Map product ID → cart item info (name, cart qty, cart index)
     var cartMap = {};
-    cartItems.forEach(function(it) {
+    cartItems.forEach(function(it, idx) {
       var product = (it && it.product) || it;
       var pid = String((product && product.id) || it.productId || 0);
       var name = (product && product.name) || it.name || '';
       var qty = Number(it.quantity || (product && product.quantity) || 1);
-      if (pid !== '0') cartMap[pid] = { name: name, cartQty: qty };
+      if (pid !== '0') cartMap[pid] = { name: name, cartQty: qty, cartIndex: idx };
     });
 
-    // Group by registry: { registryName: [{ pid, name, regQty, cartQty }] }
+    // Group by registry: { registryName: [{ pid, rid, name, regQty, cartQty, cartIndex }] }
     var groups = {};
     Object.keys(regItems).forEach(function(pid) {
       if (!cartMap[pid]) return; // not in cart, skip
@@ -1313,17 +1313,75 @@ app.get("/widget/cart.js", (req, res) => {
         var regQty = Math.min(entry.qty || 1, cartMap[pid].cartQty);
         groups[regName].push({
           pid: pid,
+          rid: entry.rid,
           name: cartMap[pid].name,
           regQty: regQty,
-          cartQty: cartMap[pid].cartQty
+          cartQty: cartMap[pid].cartQty,
+          cartIndex: cartMap[pid].cartIndex
         });
       });
     });
     return groups;
   }
 
+  // ── Remove a registry item: decrement localStorage + decrease cart qty ──
+  function removeRegItem(pid, rid) {
+    // 1. Decrement qty in _reg_items localStorage
+    try {
+      var raw = JSON.parse(localStorage.getItem('_reg_items') || '{}');
+      var entries = raw[pid];
+      if (entries && !Array.isArray(entries)) {
+        entries = [{ rid: entries.rid, name: entries.name, qty: entries.qty || 1 }];
+      }
+      if (!Array.isArray(entries)) return;
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].rid === rid) {
+          entries[i].qty = (entries[i].qty || 1) - 1;
+          if (entries[i].qty <= 0) entries.splice(i, 1);
+          break;
+        }
+      }
+      if (entries.length === 0) {
+        delete raw[pid];
+      } else {
+        raw[pid] = entries;
+      }
+      localStorage.setItem('_reg_items', JSON.stringify(raw));
+    } catch(e) {}
+
+    // 2. Decrease qty in Ecwid cart
+    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') {
+      showRegistrySummary();
+      return;
+    }
+    Ecwid.Cart.get(function(cart) {
+      var items = (cart && cart.items) || [];
+      for (var j = 0; j < items.length; j++) {
+        var product = (items[j] && items[j].product) || items[j];
+        var itemPid = String((product && product.id) || items[j].productId || 0);
+        if (itemPid === String(pid)) {
+          var currentQty = Number(items[j].quantity || 1);
+          if (currentQty <= 1) {
+            // Remove entirely
+            Ecwid.Cart.removeProduct(j);
+          } else {
+            // Remove then re-add with qty-1 (no setQuantity API available)
+            Ecwid.Cart.removeProduct(j);
+            setTimeout(function() {
+              Ecwid.Cart.addProduct(Number(pid), currentQty - 1);
+            }, 300);
+          }
+          break;
+        }
+      }
+      // Refresh panel immediately
+      setTimeout(function() { showRegistrySummary(); }, 500);
+    });
+  }
+
   // ── Registry Summary Panel ──
   var _panelId = '_reg-summary';
+  var _panelBound = false;
 
   function showRegistrySummary() {
     var regItems = getRegItems();
@@ -1354,12 +1412,16 @@ app.get("/widget/cart.js", (req, res) => {
         html += '<div style="font-weight:600;font-size:14px;color:#333;margin-bottom:4px;">' + esc(regName) + '</div>';
         html += '<ul style="margin:0 0 0 8px;padding:0;list-style:none;">';
         groups[regName].forEach(function(item) {
-          html += '<li style="padding:2px 0;font-size:13px;color:#444;">';
-          html += '\\u2022 ' + esc(item.name);
+          html += '<li style="display:flex;align-items:center;padding:3px 0;font-size:13px;color:#444;">';
+          html += '<span style="flex:1;">\\u2022 ' + esc(item.name);
           html += ' <span style="color:#666;">\\u00D7' + item.regQty + '</span>';
           if (item.cartQty > item.regQty) {
             html += ' <span style="font-size:11px;color:#888;">(' + item.regQty + ' of ' + item.cartQty + ' in cart)</span>';
           }
+          html += '</span>';
+          html += '<button data-reg-remove-pid="' + item.pid + '" data-reg-remove-rid="' + item.rid + '" '
+            + 'style="background:none;border:1px solid #ccc;border-radius:3px;padding:1px 7px;margin-left:8px;cursor:pointer;font-size:12px;color:#888;line-height:1.4;" '
+            + 'title="Remove from registry purchase">\\u00D7</button>';
           html += '</li>';
         });
         html += '</ul></div>';
@@ -1379,12 +1441,26 @@ app.get("/widget/cart.js", (req, res) => {
           storeEl.parentNode.insertBefore(box, storeEl);
         }
       }
+
+      // Bind click delegation once on the panel
+      var panel = document.getElementById(_panelId);
+      if (panel && !_panelBound) {
+        _panelBound = true;
+        panel.addEventListener('click', function(e) {
+          var btn = e.target.closest('[data-reg-remove-pid]');
+          if (!btn) return;
+          var removePid = btn.getAttribute('data-reg-remove-pid');
+          var removeRid = Number(btn.getAttribute('data-reg-remove-rid'));
+          if (removePid && removeRid) removeRegItem(removePid, removeRid);
+        });
+      }
     });
   }
 
   function removePanel() {
     var el = document.getElementById(_panelId);
     if (el && el.parentNode) el.parentNode.removeChild(el);
+    _panelBound = false;
   }
 
   // ── Pass registry data to checkout via ec.order.extraFields ──
