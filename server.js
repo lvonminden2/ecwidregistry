@@ -1079,6 +1079,8 @@ async function processEcwidOrder(order) {
     for (const match of matches) {
       matchedProductIds.add(productId);
       const registryId = match.registry_id;
+      matchedRegistries.add(registryId); // Always track for annotation, even if already recorded
+
       const dup = db
         .prepare("SELECT id FROM registry_purchase WHERE order_id = ? AND product_id = ? AND registry_id = ?")
         .get(orderNumber, productId, registryId);
@@ -1103,7 +1105,6 @@ async function processEcwidOrder(order) {
         null, 0, "online", orderNumber
       );
       recorded++;
-      matchedRegistries.add(registryId);
     }
   }
 
