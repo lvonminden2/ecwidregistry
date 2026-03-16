@@ -63,6 +63,40 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
   <% } %>
 
   <div class="card">
+    <h2>Shipping Instructions</h2>
+    <form method="post" action="/admin/registry/<%= registry.id %>/shipping">
+      <div class="radio-group">
+        <label class="radio-label">
+          <input type="radio" name="shipping_method" value="pickup" <%= (registry.shipping_method || 'pickup') === 'pickup' ? 'checked' : '' %> />
+          Pick up in store
+        </label>
+        <label class="radio-label">
+          <input type="radio" name="shipping_method" value="ship_to_registrant" <%= registry.shipping_method === 'ship_to_registrant' ? 'checked' : '' %> />
+          Ship to registrant
+        </label>
+      </div>
+      <div id="shipping-address-wrap" style="<%= registry.shipping_method === 'ship_to_registrant' ? '' : 'display:none;' %>margin-top:10px;">
+        <label class="field">
+          <div class="label">Shipping address</div>
+          <textarea name="shipping_address" rows="3" placeholder="Street, City, State, ZIP"><%= registry.shipping_address || '' %></textarea>
+        </label>
+      </div>
+      <button class="btn" type="submit" style="margin-top:10px">Save shipping settings</button>
+    </form>
+    <script>
+    (function(){
+      var radios = document.querySelectorAll('input[name="shipping_method"]');
+      var wrap = document.getElementById('shipping-address-wrap');
+      radios.forEach(function(r) {
+        r.addEventListener('change', function() {
+          wrap.style.display = this.value === 'ship_to_registrant' ? '' : 'none';
+        });
+      });
+    })();
+    </script>
+  </div>
+
+  <div class="card">
     <h2>Search by SKU</h2>
     <form method="get" action="/admin/registry/<%= registry.id %>">
       <label class="field">

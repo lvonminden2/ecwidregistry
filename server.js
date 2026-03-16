@@ -25,6 +25,9 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const PUBLIC_REGISTRY_URL = process.env.PUBLIC_REGISTRY_URL || "";
 // URL of the page where the registry widget is embedded.
 const REGISTRY_PAGE_URL = process.env.REGISTRY_PAGE_URL || '';
+// Shipping rates for custom shipping handler
+const SHIPPING_FLAT_RATE = Number(process.env.SHIPPING_FLAT_RATE || 5.99);
+const SHIPPING_FREE_THRESHOLD = Number(process.env.SHIPPING_FREE_THRESHOLD || 0);
 
 const app = express();
 app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
@@ -147,6 +150,12 @@ const init = db.transaction(() => {
   }
   if (!cols.includes("photo")) {
     db.exec("ALTER TABLE registry ADD COLUMN photo TEXT");
+  }
+  if (!cols.includes("shipping_method")) {
+    db.exec("ALTER TABLE registry ADD COLUMN shipping_method TEXT NOT NULL DEFAULT 'pickup'");
+  }
+  if (!cols.includes("shipping_address")) {
+    db.exec("ALTER TABLE registry ADD COLUMN shipping_address TEXT");
   }
   const itemCols = db.prepare("PRAGMA table_info(registry_item)").all().map((c) => c.name);
   if (!itemCols.includes("product_sku")) {
@@ -479,6 +488,19 @@ app.post("/admin/registry/:id/edit", (req, res) => {
     "UPDATE registry SET display_name = ?, event_date = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(name, date, registryId);
   const msg = encodeURIComponent("Registry updated.");
+  return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
+app.post("/admin/registry/:id/shipping", (req, res) => {
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).send("Not found");
+  const method = req.body.shipping_method === "ship_to_registrant" ? "ship_to_registrant" : "pickup";
+  const address = method === "ship_to_registrant" ? String(req.body.shipping_address || "").trim() : null;
+  db.prepare(
+    "UPDATE registry SET shipping_method = ?, shipping_address = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(method, address, registryId);
+  const msg = encodeURIComponent("Shipping settings updated.");
   return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
 });
 
@@ -1088,33 +1110,97 @@ async function processEcwidOrder(order) {
   // Annotate the Ecwid order with per-item and order-level notes
   if (matchedRegistries.size > 0 && ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
     try {
-      const regNames = [];
+      // Fetch full registry info (name, shipping_method, shipping_address) for each matched registry
+      const regInfoMap = new Map();
       for (const rid of matchedRegistries) {
-        const reg = db.prepare("SELECT display_name FROM registry WHERE id = ?").get(rid);
-        if (reg) regNames.push(reg.display_name);
+        const reg = db.prepare("SELECT id, display_name, shipping_method, shipping_address FROM registry WHERE id = ?").get(rid);
+        if (reg) regInfoMap.set(rid, reg);
       }
 
-      // Build detailed privateAdminNotes listing which items are registry gifts
+      // Build a map of productId → [{ registryId, registryName }] for per-item labeling
+      const productRegistryMap = new Map();
+      for (const item of orderItems) {
+        const pid = Number(item.productId);
+        if (!matchedProductIds.has(pid)) continue;
+        if (registryAllocations && registryAllocations[String(pid)]) {
+          for (const alloc of registryAllocations[String(pid)]) {
+            if (regInfoMap.has(alloc.rid)) {
+              if (!productRegistryMap.has(pid)) productRegistryMap.set(pid, []);
+              productRegistryMap.get(pid).push({ rid: alloc.rid, qty: alloc.qty });
+            }
+          }
+        } else {
+          // Fallback: associate with all matched registries
+          for (const rid of matchedRegistries) {
+            if (regInfoMap.has(rid)) {
+              if (!productRegistryMap.has(pid)) productRegistryMap.set(pid, []);
+              productRegistryMap.get(pid).push({ rid, qty: Number(item.quantity || 1) });
+            }
+          }
+        }
+      }
+
+      // ── Staff notes (privateAdminNotes) ──
+      const regNames = [...regInfoMap.values()].map(r => r.display_name);
       const giftItemNames = orderItems
         .filter(it => matchedProductIds.has(Number(it.productId)))
         .map(it => it.name || it.sku || `#${it.productId}`);
-      const note = `GIFT REGISTRY ORDER — ${regNames.join(", ")}\nRegistry items: ${giftItemNames.join(", ")}`;
 
-      // Update per-item notes so clerks see which items are gifts
+      let staffNote = `GIFT REGISTRY ORDER — ${regNames.join(", ")}\nRegistry items: ${giftItemNames.join(", ")}`;
+
+      // Add shipping instructions per registry
+      const shippingLines = [];
+      for (const [, reg] of regInfoMap) {
+        if (reg.shipping_method === "ship_to_registrant" && reg.shipping_address) {
+          shippingLines.push(`• ${reg.display_name} — SHIP TO REGISTRANT: ${reg.shipping_address}`);
+        } else {
+          shippingLines.push(`• ${reg.display_name} — IN-STORE PICKUP`);
+        }
+      }
+      staffNote += `\n\nSHIPPING INSTRUCTIONS:\n${shippingLines.join("\n")}`;
+
+      // ── Customer notes (orderComments) ──
+      const customerLines = [];
+      for (const item of orderItems) {
+        const pid = Number(item.productId);
+        const prMap = productRegistryMap.get(pid);
+        if (!prMap) continue;
+        const itemName = item.name || item.sku || `#${item.productId}`;
+        for (const entry of prMap) {
+          const reg = regInfoMap.get(entry.rid);
+          if (reg) customerLines.push(`• ${itemName} — ${reg.display_name}`);
+        }
+      }
+      let customerNote = "";
+      if (customerLines.length > 0) {
+        customerNote = `🎁 This order contains gift registry items:\n${customerLines.join("\n")}\n\nItems listed above will be recorded as purchased on their registries. Thank you for your gift!`;
+      }
+
+      // ── Per-item notes with registry name + shipping method ──
       const updatedItems = orderItems.map(it => {
         const pid = Number(it.productId);
-        if (matchedProductIds.has(pid)) {
-          const regLabel = "Gift Registry: " + regNames.join(", ");
-          return { ...it, note: it.note ? it.note + " | " + regLabel : regLabel };
-        }
-        return it;
+        const prMap = productRegistryMap.get(pid);
+        if (!prMap || prMap.length === 0) return it;
+
+        const labels = prMap.map(entry => {
+          const reg = regInfoMap.get(entry.rid);
+          if (!reg) return null;
+          const shippingLabel = reg.shipping_method === "ship_to_registrant" ? "Ship to registrant" : "Pickup in store";
+          return `Gift Registry: ${reg.display_name} | ${shippingLabel}`;
+        }).filter(Boolean);
+
+        const regLabel = labels.join("; ");
+        return { ...it, note: it.note ? it.note + " | " + regLabel : regLabel };
       });
 
       const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderNumber}`;
+      const putBody = { privateAdminNotes: staffNote, items: updatedItems };
+      if (customerNote) putBody.orderComments = customerNote;
+
       await fetch(url, {
         method: "PUT",
         headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ privateAdminNotes: note, items: updatedItems })
+        body: JSON.stringify(putBody)
       });
       console.log(`[order] #${orderNumber} — annotated ${giftItemNames.length} registry item(s): ${giftItemNames.join(", ")}`);
     } catch (err) {
@@ -1124,6 +1210,118 @@ async function processEcwidOrder(order) {
 
   return { recorded, registries: [...matchedRegistries] };
 }
+
+// ─── Custom Shipping Handler ─────────────────────────────────────────────────
+// Ecwid POSTs cart data here so we can exclude "pickup in store" registry items
+// from shipping cost calculations. Must respond within 10 seconds.
+app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
+  try {
+    const cart = req.body?.cart || req.body;
+    const items = cart?.items || [];
+
+    // Identify which items are registry pickup items
+    let nonPickupSubtotal = 0;
+    let hasPickupRegistryItems = false;
+    let hasShippableItems = false;
+
+    for (const item of items) {
+      const productId = Number(item.productId || item.id);
+      if (!productId) {
+        // Unknown item — treat as shippable
+        nonPickupSubtotal += Number(item.price || 0) * Number(item.quantity || 1);
+        hasShippableItems = true;
+        continue;
+      }
+
+      // Check if this product is in any active registry
+      const regMatch = db.prepare(
+        `SELECT r.shipping_method FROM registry_item ri
+         JOIN registry r ON ri.registry_id = r.id
+         WHERE ri.product_id = ? AND r.status = 'active'
+         LIMIT 1`
+      ).get(productId);
+
+      if (regMatch && regMatch.shipping_method === "pickup") {
+        // Registry item with in-store pickup — exclude from shipping
+        hasPickupRegistryItems = true;
+      } else {
+        // Regular item or registry item that ships to registrant
+        nonPickupSubtotal += Number(item.price || 0) * Number(item.quantity || 1);
+        hasShippableItems = true;
+      }
+    }
+
+    const shippingOptions = [];
+
+    // Check free shipping threshold
+    const freeShippingMet = SHIPPING_FREE_THRESHOLD > 0 && nonPickupSubtotal >= SHIPPING_FREE_THRESHOLD;
+
+    if (!hasShippableItems && hasPickupRegistryItems) {
+      // ALL items are pickup registry items → $0 shipping
+      shippingOptions.push({
+        title: "In-Store Pickup (Registry Items)",
+        rate: 0,
+        transitDays: "",
+        description: "Registry items available for in-store pickup"
+      });
+    } else if (hasShippableItems && hasPickupRegistryItems) {
+      // Mixed order — some pickup registry items, some regular
+      if (freeShippingMet) {
+        shippingOptions.push({
+          title: "Free Shipping",
+          rate: 0,
+          transitDays: "5-7",
+          description: `Free shipping on orders over $${SHIPPING_FREE_THRESHOLD}. Registry pickup items excluded from shipping.`
+        });
+      } else {
+        shippingOptions.push({
+          title: "Standard Shipping",
+          rate: SHIPPING_FLAT_RATE,
+          transitDays: "3-5",
+          description: "Shipping for non-registry items. Registry items available for in-store pickup."
+        });
+      }
+      // Always offer pickup option for mixed orders
+      shippingOptions.push({
+        title: "In-Store Pickup (All Items)",
+        rate: 0,
+        transitDays: "",
+        description: "Pick up all items in store"
+      });
+    } else {
+      // No registry pickup items — normal shipping
+      if (freeShippingMet) {
+        shippingOptions.push({
+          title: "Free Shipping",
+          rate: 0,
+          transitDays: "5-7",
+          description: `Free shipping on orders over $${SHIPPING_FREE_THRESHOLD}`
+        });
+      } else {
+        shippingOptions.push({
+          title: "Standard Shipping",
+          rate: SHIPPING_FLAT_RATE,
+          transitDays: "3-5",
+          description: "Standard delivery"
+        });
+      }
+    }
+
+    console.log(`[shipping] ${items.length} item(s) — pickup: ${hasPickupRegistryItems}, shippable: ${hasShippableItems}, subtotal: $${nonPickupSubtotal.toFixed(2)}`);
+    return res.json({ shippingOptions });
+  } catch (err) {
+    console.log(`[shipping] error: ${err.message}`);
+    // Return a default option so checkout isn't blocked
+    return res.json({
+      shippingOptions: [{
+        title: "Standard Shipping",
+        rate: SHIPPING_FLAT_RATE,
+        transitDays: "3-5",
+        description: "Standard delivery"
+      }]
+    });
+  }
+});
 
 // Fetch full order details from Ecwid REST API
 async function fetchEcwidOrder(orderId) {
