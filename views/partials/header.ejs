@@ -6,8 +6,15 @@
     <title><%= title %> — Le Petite Gourmet Shoppe</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap" rel="stylesheet" />
+    <% if (typeof isAdmin !== 'undefined' && isAdmin) { %>
+      <link href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
+    <% } else { %>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Prata&display=swap" rel="stylesheet" />
+    <% } %>
     <link rel="stylesheet" href="/public/styles.css" />
+    <% if (typeof isAdmin !== 'undefined' && isAdmin) { %>
+      <link rel="stylesheet" href="/public/admin.css" />
+    <% } %>
     <!-- Ecwid native app SDK — required for iframe resizing and app initialization -->
     <script src="https://djqizrxa6f10j.cloudfront.net/ecwid-sdk/js/1.3.0/ecwid-app.js"></script>
     <script>

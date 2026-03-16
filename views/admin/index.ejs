@@ -1,8 +1,9 @@
-<%- include('../partials/header', { title: 'Registry Admin' }) %>
+<%- include('../partials/header', { title: 'Registry Admin', isAdmin: true }) %>
 
 <div class="toolbar">
   <h1>Registries</h1>
   <div class="toolbar-actions">
+    <a class="btn secondary" href="/admin/settings">Settings</a>
     <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="<%= publicRegistryUrl %>">View Storefront</a>
     <a class="btn" href="/admin/registry/new">New registry</a>
   </div>

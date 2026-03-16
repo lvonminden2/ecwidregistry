@@ -1,0 +1,226 @@
+/* ── Ecwid Design System Overrides ──────────────────────────────────────────
+   Loaded AFTER styles.css on admin pages only.
+   Matches the Ecwid control panel so the app feels native inside the iframe.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --bg: #f5f5f5;
+  --card: #f7f7f7;
+  --ink: #0a1c2e;
+  --muted: #607385;
+  --accent: #275ce0;
+  --accent-light: #1b409d;
+  --border: #c5cdd8;
+  --white: #ffffff;
+}
+
+body {
+  font-family: "Lato", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--bg);
+}
+
+.page {
+  max-width: 960px;
+  margin: 20px auto;
+  padding: 0 20px 40px;
+}
+
+/* ── Typography ─────────────────────────── */
+h1 {
+  font-family: "Lato", sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: normal;
+}
+
+h2 {
+  font-family: "Lato", sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* ── Cards ──────────────────────────────── */
+.card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+/* ── Toolbar ────────────────────────────── */
+.toolbar {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+}
+
+/* ── Buttons ────────────────────────────── */
+.btn {
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 18px;
+  font-family: "Lato", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.btn:hover {
+  background: var(--accent-light);
+  border-color: var(--accent-light);
+}
+
+.btn.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.btn.secondary:hover {
+  background: #f0f4ff;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.link {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* ── Forms ──────────────────────────────── */
+.label {
+  font-family: "Lato", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink);
+}
+
+input, select, textarea {
+  font-family: "Lato", sans-serif;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 12px;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(39, 92, 224, 0.15);
+}
+
+/* ── Radio / Checkbox ──────────────────── */
+.radio-label input[type="radio"],
+.radio-label input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+/* ── Badges ─────────────────────────────── */
+.badge, .reg-type-badge {
+  border-radius: 4px;
+}
+
+.badge-online, .reg-type-online {
+  background: #e8f0fe;
+  color: #275ce0;
+}
+
+.badge-instore, .reg-type-instore {
+  background: #e8f8ed;
+  color: #0cac42;
+}
+
+.channel-online { background: #e8f0fe; color: #275ce0; }
+.channel-in_store { background: #e8f8ed; color: #0cac42; }
+.channel-off_registry { background: #fef9c3; color: #854d0e; }
+
+/* ── Status colors ─────────────────────── */
+.reg-ok { color: #0cac42; }
+.reg-error { color: #f43c36; }
+
+/* ── Code blocks ───────────────────────── */
+code {
+  font-size: 12px;
+  background: #f5f7fa;
+  color: var(--accent);
+  border-radius: 3px;
+}
+
+.code-block {
+  background: #f5f7fa;
+  border-color: var(--border);
+  border-radius: 5px;
+}
+
+/* ── Details/edit sections ─────────────── */
+.edit-meta summary,
+.purchase-edit summary {
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 13px;
+}
+
+.purchase-edit[open] {
+  background: #f5f7fa;
+  border-radius: 5px;
+}
+
+/* ── Settings page ─────────────────────── */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+
+.settings-row:last-child { border-bottom: none; }
+
+.settings-key {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  min-width: 160px;
+}
+
+.settings-val {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+  word-break: break-all;
+}
+
+.settings-val code {
+  font-size: 12px;
+  padding: 4px 8px;
+  background: #f5f7fa;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+.status-dot.ok { background: #0cac42; }
+.status-dot.missing { background: #f43c36; }

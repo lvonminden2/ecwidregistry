@@ -179,6 +179,14 @@ const init = db.transaction(() => {
   if (!accountCols.includes("ecwid_customer_id")) {
     db.exec("ALTER TABLE registry_account ADD COLUMN ecwid_customer_id TEXT");
   }
+
+  // Settings key-value store
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
 });
 init();
 
@@ -208,7 +216,7 @@ app.use((req, res, next) => {
   res.locals.ecwid = req.ecwid;
   res.locals.ecwidClientId = ECWID_CLIENT_ID;
   // Resolved public registry base URL: Ecwid storefront page if configured, else our own /registry
-  res.locals.publicRegistryUrl = PUBLIC_REGISTRY_URL || (BASE_URL + "/registry");
+  res.locals.publicRegistryUrl = getPublicRegistryUrl() || (BASE_URL + "/registry");
   next();
 });
 
@@ -284,6 +292,37 @@ function getRegistryPurchases(registryId) {
     `
     )
     .all(registryId);
+}
+
+// ── Settings helpers ──────────────────────────────────────────────────────────
+function getSetting(key, defaultValue = '') {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : defaultValue;
+}
+
+function setSetting(key, value) {
+  db.prepare(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run(key, value);
+}
+
+// Resolved settings: DB value takes priority over env var
+function getShippingFlatRate() {
+  const dbVal = getSetting('shipping_flat_rate');
+  return dbVal ? Number(dbVal) : SHIPPING_FLAT_RATE;
+}
+
+function getShippingFreeThreshold() {
+  const dbVal = getSetting('shipping_free_threshold');
+  return dbVal ? Number(dbVal) : SHIPPING_FREE_THRESHOLD;
+}
+
+function getPublicRegistryUrl() {
+  return getSetting('public_registry_url') || PUBLIC_REGISTRY_URL || '';
+}
+
+function getRegistryPageUrl() {
+  return getSetting('registry_page_url') || REGISTRY_PAGE_URL || '';
 }
 
 // Helpers for Ecwid API (optional)
@@ -502,6 +541,60 @@ app.post("/admin/registry/:id/shipping", (req, res) => {
   ).run(method, address, registryId);
   const msg = encodeURIComponent("Shipping settings updated.");
   return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
+});
+
+// ── Settings page ─────────────────────────────────────────────────────────────
+app.get("/admin/settings", (req, res) => {
+  if (!req.ecwid && !ALLOW_NO_ECWID) {
+    return res.status(401).send("Not authorized");
+  }
+
+  const settings = {
+    shippingFlatRate: getShippingFlatRate(),
+    shippingFreeThreshold: getShippingFreeThreshold(),
+    publicRegistryUrl: getPublicRegistryUrl(),
+    registryPageUrl: getRegistryPageUrl(),
+    ecwidStoreId: ECWID_STORE_ID,
+    ecwidClientId: ECWID_CLIENT_ID,
+    hasAccessToken: !!ECWID_ACCESS_TOKEN,
+    hasClientSecret: !!ECWID_CLIENT_SECRET,
+    baseUrl: BASE_URL,
+    nodeEnv: process.env.NODE_ENV || 'development',
+  };
+
+  const webhooks = {
+    orderCreated: `${BASE_URL}/webhooks/ecwid/order-created`,
+    shipping: `${BASE_URL}/webhooks/ecwid/shipping`,
+  };
+
+  const actionError = req.query.error || null;
+  const actionInfo = req.query.info || null;
+
+  res.render("admin/settings", { settings, webhooks, actionError, actionInfo });
+});
+
+app.post("/admin/settings", (req, res) => {
+  if (!req.ecwid && !ALLOW_NO_ECWID) {
+    return res.status(401).send("Not authorized");
+  }
+
+  const { shipping_flat_rate, shipping_free_threshold, public_registry_url, registry_page_url } = req.body;
+
+  const flatRate = Number(shipping_flat_rate);
+  if (isNaN(flatRate) || flatRate < 0) {
+    return res.redirect("/admin/settings?error=" + encodeURIComponent("Shipping flat rate must be a non-negative number."));
+  }
+  const freeThreshold = Number(shipping_free_threshold);
+  if (isNaN(freeThreshold) || freeThreshold < 0) {
+    return res.redirect("/admin/settings?error=" + encodeURIComponent("Free threshold must be a non-negative number."));
+  }
+
+  setSetting('shipping_flat_rate', String(flatRate));
+  setSetting('shipping_free_threshold', String(freeThreshold));
+  setSetting('public_registry_url', String(public_registry_url || '').trim());
+  setSetting('registry_page_url', String(registry_page_url || '').trim());
+
+  return res.redirect("/admin/settings?info=" + encodeURIComponent("Settings saved."));
 });
 
 app.post("/admin/registry/:id/items", async (req, res) => {
@@ -1267,9 +1360,11 @@ app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
     }
 
     const shippingOptions = [];
+    const flatRate = getShippingFlatRate();
+    const freeThreshold = getShippingFreeThreshold();
 
     // Check free shipping threshold
-    const freeShippingMet = SHIPPING_FREE_THRESHOLD > 0 && nonPickupSubtotal >= SHIPPING_FREE_THRESHOLD;
+    const freeShippingMet = freeThreshold > 0 && nonPickupSubtotal >= freeThreshold;
 
     if (!hasShippableItems && hasPickupRegistryItems) {
       // ALL items are pickup registry items → $0 shipping
@@ -1286,12 +1381,12 @@ app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
           title: "Free Shipping",
           rate: 0,
           transitDays: "5-7",
-          description: `Free shipping on orders over $${SHIPPING_FREE_THRESHOLD}. Registry pickup items excluded from shipping.`
+          description: `Free shipping on orders over $${freeThreshold}. Registry pickup items excluded from shipping.`
         });
       } else {
         shippingOptions.push({
           title: "Standard Shipping",
-          rate: SHIPPING_FLAT_RATE,
+          rate: flatRate,
           transitDays: "3-5",
           description: "Shipping for non-registry items. Registry items available for in-store pickup."
         });
@@ -1310,12 +1405,12 @@ app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
           title: "Free Shipping",
           rate: 0,
           transitDays: "5-7",
-          description: `Free shipping on orders over $${SHIPPING_FREE_THRESHOLD}`
+          description: `Free shipping on orders over $${freeThreshold}`
         });
       } else {
         shippingOptions.push({
           title: "Standard Shipping",
-          rate: SHIPPING_FLAT_RATE,
+          rate: flatRate,
           transitDays: "3-5",
           description: "Standard delivery"
         });
@@ -1330,7 +1425,7 @@ app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
     return res.json({
       shippingOptions: [{
         title: "Standard Shipping",
-        rate: SHIPPING_FLAT_RATE,
+        rate: getShippingFlatRate(),
         transitDays: "3-5",
         description: "Standard delivery"
       }]

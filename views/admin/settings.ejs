@@ -1,0 +1,131 @@
+<%- include('../partials/header', { title: 'Settings', isAdmin: true }) %>
+
+<div class="toolbar">
+  <h1>Settings</h1>
+  <a class="link" href="/admin">Back to registries</a>
+</div>
+
+<% if (actionError) { %>
+  <div class="card"><div class="reg-error"><%= actionError %></div></div>
+<% } %>
+<% if (actionInfo) { %>
+  <div class="card"><div style="color:#0cac42"><%= actionInfo %></div></div>
+<% } %>
+
+<!-- Integration Status -->
+<div class="card">
+  <h2>Integration Status</h2>
+  <div class="settings-row">
+    <div class="settings-key">Ecwid Store ID</div>
+    <div class="settings-val">
+      <% if (settings.ecwidStoreId && settings.ecwidStoreId !== 'STORE_ID_PLACEHOLDER') { %>
+        <span class="status-dot ok"></span><%= settings.ecwidStoreId %>
+      <% } else { %>
+        <span class="status-dot missing"></span>Not configured
+      <% } %>
+    </div>
+  </div>
+  <div class="settings-row">
+    <div class="settings-key">Client ID</div>
+    <div class="settings-val">
+      <% if (settings.ecwidClientId) { %>
+        <span class="status-dot ok"></span><%= settings.ecwidClientId %>
+      <% } else { %>
+        <span class="status-dot missing"></span>Not configured
+      <% } %>
+    </div>
+  </div>
+  <div class="settings-row">
+    <div class="settings-key">API Access Token</div>
+    <div class="settings-val">
+      <% if (settings.hasAccessToken) { %>
+        <span class="status-dot ok"></span>Configured
+      <% } else { %>
+        <span class="status-dot missing"></span>Not configured
+      <% } %>
+    </div>
+  </div>
+  <div class="settings-row">
+    <div class="settings-key">Client Secret</div>
+    <div class="settings-val">
+      <% if (settings.hasClientSecret) { %>
+        <span class="status-dot ok"></span>Configured
+      <% } else { %>
+        <span class="status-dot missing"></span>Not configured
+      <% } %>
+    </div>
+  </div>
+  <div class="settings-row">
+    <div class="settings-key">Environment</div>
+    <div class="settings-val"><%= settings.nodeEnv %></div>
+  </div>
+  <div class="settings-row">
+    <div class="settings-key">Base URL</div>
+    <div class="settings-val"><code><%= settings.baseUrl %></code></div>
+  </div>
+</div>
+
+<!-- Webhook URLs -->
+<div class="card">
+  <h2>Webhook URLs</h2>
+  <p class="muted" style="margin-bottom:12px">Register these URLs in your Ecwid app dashboard.</p>
+  <div class="settings-row">
+    <div class="settings-key">Order Created</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <code style="font-size:12px;padding:4px 8px;background:#f5f7fa;border:1px solid var(--border);border-radius:4px"><%= webhooks.orderCreated %></code>
+      <button class="btn secondary copy-link-btn" data-url="<%= webhooks.orderCreated %>" style="font-size:12px;padding:5px 12px">Copy</button>
+    </div>
+  </div>
+  <div class="settings-row">
+    <div class="settings-key">Custom Shipping</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <code style="font-size:12px;padding:4px 8px;background:#f5f7fa;border:1px solid var(--border);border-radius:4px"><%= webhooks.shipping %></code>
+      <button class="btn secondary copy-link-btn" data-url="<%= webhooks.shipping %>" style="font-size:12px;padding:5px 12px">Copy</button>
+    </div>
+  </div>
+</div>
+
+<!-- Editable Settings -->
+<form class="card" method="post" action="/admin/settings">
+  <h2>Shipping</h2>
+  <div class="grid">
+    <label class="field">
+      <div class="label">Flat rate ($)</div>
+      <input name="shipping_flat_rate" type="number" step="0.01" min="0" value="<%= settings.shippingFlatRate %>" />
+    </label>
+    <label class="field">
+      <div class="label">Free shipping threshold ($)</div>
+      <input name="shipping_free_threshold" type="number" step="0.01" min="0" value="<%= settings.shippingFreeThreshold %>" />
+      <div class="muted" style="font-size:12px;margin-top:4px">Set to 0 to disable free shipping</div>
+    </label>
+  </div>
+
+  <h2 style="margin-top:24px">Registry URLs</h2>
+  <label class="field">
+    <div class="label">Public registry URL</div>
+    <input name="public_registry_url" type="url" value="<%= settings.publicRegistryUrl %>" placeholder="https://yourstore.com/registry-page" />
+    <div class="muted" style="font-size:12px;margin-top:4px">Storefront page where the registry widget is displayed. Leave blank to use the built-in /registry page.</div>
+  </label>
+  <label class="field">
+    <div class="label">Registry page URL</div>
+    <input name="registry_page_url" type="url" value="<%= settings.registryPageUrl %>" placeholder="https://yourstore.com/registry-page" />
+    <div class="muted" style="font-size:12px;margin-top:4px">Page where the registry widget JS is embedded.</div>
+  </label>
+
+  <button class="btn" type="submit" style="margin-top:12px">Save settings</button>
+</form>
+
+<script>
+document.querySelectorAll('.copy-link-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const url = btn.getAttribute('data-url');
+    navigator.clipboard.writeText(url).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    });
+  });
+});
+</script>
+
+<%- include('../partials/footer') %>
