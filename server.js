@@ -13,13 +13,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 3000;
-const ECWID_STORE_ID = process.env.ECWID_STORE_ID || "STORE_ID_PLACEHOLDER";
 const ECWID_CLIENT_ID = process.env.ECWID_CLIENT_ID || "";
-const ECWID_ACCESS_TOKEN = process.env.ECWID_ACCESS_TOKEN || "";
 const ECWID_CLIENT_SECRET = process.env.ECWID_CLIENT_SECRET || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev_session_secret";
 const ALLOW_NO_ECWID = (process.env.ALLOW_NO_ECWID || "true").toLowerCase() === "true";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+// Legacy single-store env vars — used as fallbacks when no per-store record exists
+const LEGACY_ECWID_STORE_ID = process.env.ECWID_STORE_ID || "";
+const LEGACY_ECWID_ACCESS_TOKEN = process.env.ECWID_ACCESS_TOKEN || "";
 // URL of the Ecwid storefront page where the widget is embedded.
 // If set, all public-facing registry links point here instead of the standalone /registry page.
 const PUBLIC_REGISTRY_URL = process.env.PUBLIC_REGISTRY_URL || "";
@@ -187,8 +188,82 @@ const init = db.transaction(() => {
       value TEXT
     );
   `);
+
+  // Per-store credentials for public app (multi-store support)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS stores (
+      store_id TEXT PRIMARY KEY,
+      access_token TEXT NOT NULL,
+      public_token TEXT,
+      installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Per-store settings (key scoped by store_id)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS store_settings (
+      store_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT,
+      PRIMARY KEY (store_id, key)
+    );
+  `);
 });
 init();
+
+// ── Per-store credential helpers ────────────────────────────────────────────
+function upsertStore(storeId, accessToken, publicToken) {
+  db.prepare(`
+    INSERT INTO stores (store_id, access_token, public_token, installed_at, updated_at)
+    VALUES (?, ?, ?, datetime('now'), datetime('now'))
+    ON CONFLICT(store_id) DO UPDATE SET
+      access_token = excluded.access_token,
+      public_token = COALESCE(excluded.public_token, stores.public_token),
+      updated_at = datetime('now')
+  `).run(storeId, accessToken, publicToken || null);
+}
+
+function getStore(storeId) {
+  return db.prepare("SELECT * FROM stores WHERE store_id = ?").get(storeId) || null;
+}
+
+function getAllStores() {
+  return db.prepare("SELECT * FROM stores").all();
+}
+
+/** Resolve access token for a given store: DB record → legacy env var fallback */
+function resolveStoreCredentials(storeId) {
+  if (storeId) {
+    const store = getStore(storeId);
+    if (store) return { storeId, accessToken: store.access_token, publicToken: store.public_token };
+  }
+  // Legacy fallback for single-store setups
+  if (LEGACY_ECWID_STORE_ID && LEGACY_ECWID_ACCESS_TOKEN) {
+    return { storeId: LEGACY_ECWID_STORE_ID, accessToken: LEGACY_ECWID_ACCESS_TOKEN, publicToken: "" };
+  }
+  return { storeId: storeId || "", accessToken: "", publicToken: "" };
+}
+
+// ── Per-store settings helpers ──────────────────────────────────────────────
+function getStoreSetting(storeId, key, defaultValue = '') {
+  if (storeId) {
+    const row = db.prepare('SELECT value FROM store_settings WHERE store_id = ? AND key = ?').get(storeId, key);
+    if (row) return row.value;
+  }
+  // Fallback to global settings
+  return getSetting(key, defaultValue);
+}
+
+function setStoreSetting(storeId, key, value) {
+  if (storeId) {
+    db.prepare(
+      'INSERT INTO store_settings (store_id, key, value) VALUES (?, ?, ?) ON CONFLICT(store_id, key) DO UPDATE SET value = excluded.value'
+    ).run(storeId, key, value);
+  } else {
+    setSetting(key, value);
+  }
+}
 
 function normalizeBase64(input) {
   let str = input.replace(/-/g, "+").replace(/_/g, "/");
@@ -421,6 +496,85 @@ function verifyPortalToken(token) {
   }
 }
 
+// ── OAuth 2.0 install flow (for external / App Market installs) ─────────────
+// Step 1: Redirect merchants to Ecwid's authorization dialog
+app.get("/ecwid/install", (req, res) => {
+  if (!ECWID_CLIENT_ID || !ECWID_CLIENT_SECRET) {
+    return res.status(500).send("App not configured — ECWID_CLIENT_ID and ECWID_CLIENT_SECRET are required.");
+  }
+  const redirectUri = `${BASE_URL}/ecwid/oauth-callback`;
+  const scope = "read_store_profile read_catalog read_orders update_orders read_customers";
+  const authUrl = `https://my.ecwid.com/api/oauth/authorize?client_id=${ECWID_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}`;
+  res.redirect(authUrl);
+});
+
+// Step 2: Handle Ecwid's redirect after merchant authorizes
+app.get("/ecwid/oauth-callback", async (req, res) => {
+  const { code, store_id } = req.query;
+  if (!code) {
+    return res.status(400).send("Missing authorization code from Ecwid.");
+  }
+  if (!ECWID_CLIENT_ID || !ECWID_CLIENT_SECRET) {
+    return res.status(500).send("App not configured.");
+  }
+
+  const storeId = String(store_id || "");
+  // Exchange the authorization code for an access token
+  // Use the new /api/oauth/token/{store_id} endpoint (Sept 2025+)
+  const tokenUrl = storeId
+    ? `https://my.ecwid.com/api/oauth/token/${storeId}`
+    : `https://my.ecwid.com/api/oauth/token`;
+
+  try {
+    const params = new URLSearchParams({
+      client_id: ECWID_CLIENT_ID,
+      client_secret: ECWID_CLIENT_SECRET,
+      code,
+      grant_type: "authorization_code",
+    });
+    if (storeId) params.set("store_id", storeId);
+
+    const tokenRes = await fetch(tokenUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+
+    if (!tokenRes.ok) {
+      const errBody = await tokenRes.text();
+      console.log(`[oauth] token exchange failed: ${tokenRes.status} ${errBody}`);
+      return res.status(400).send(`Token exchange failed: ${tokenRes.status}. Please try installing again.`);
+    }
+
+    const tokenData = await tokenRes.json();
+    const resolvedStoreId = String(tokenData.store_id || storeId || "");
+    const accessToken = tokenData.access_token || tokenData.secret_token || "";
+    const publicToken = tokenData.public_token || "";
+
+    if (!resolvedStoreId || !accessToken) {
+      console.log(`[oauth] incomplete token response: ${JSON.stringify(tokenData)}`);
+      return res.status(400).send("Incomplete response from Ecwid. Please try again.");
+    }
+
+    // Save store credentials
+    upsertStore(resolvedStoreId, accessToken, publicToken);
+    console.log(`[oauth] store ${resolvedStoreId} installed successfully`);
+
+    // Set up session so the merchant lands in the admin
+    req.session.ecwid = {
+      store_id: resolvedStoreId,
+      access_token: accessToken,
+      public_token: publicToken,
+      lang: "",
+    };
+
+    return res.redirect("/admin");
+  } catch (err) {
+    console.log(`[oauth] error: ${err.message}`);
+    return res.status(500).send("OAuth error. Please try installing again.");
+  }
+});
+
 // Native app iframe entrypoint
 app.get("/ecwid/iframe", (req, res) => {
   // Allow Ecwid to embed this page in an iframe
@@ -434,19 +588,34 @@ app.get("/ecwid/iframe", (req, res) => {
       console.log("[ecwid-iframe] payload decrypt failed — check ECWID_CLIENT_SECRET");
       return res.status(400).send("Invalid payload — ECWID_CLIENT_SECRET mismatch");
     }
-    console.log(`[ecwid-iframe] payload ok store_id=${data.store_id || data.storeId || ""}`);
+    const storeId = String(data.store_id || data.storeId || "");
+    const accessToken = data.access_token || data.accessToken || "";
+    const publicToken = data.public_token || data.publicToken || "";
+    console.log(`[ecwid-iframe] payload ok store_id=${storeId}`);
     req.session.ecwid = {
-      store_id: String(data.store_id || data.storeId || ""),
-      access_token: data.access_token || data.accessToken || "",
-      public_token: data.public_token || data.publicToken || "",
+      store_id: storeId,
+      access_token: accessToken,
+      public_token: publicToken,
       lang: data.lang || ""
     };
+    // Persist store credentials so they survive across sessions and are
+    // available for webhooks, auto-sync, and other background tasks.
+    if (storeId && accessToken) {
+      upsertStore(storeId, accessToken, publicToken);
+      console.log(`[ecwid-iframe] store ${storeId} credentials saved`);
+    }
   } else if (payload) {
     console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET — skipping payload verification");
   }
 
   // Render admin directly (avoid redirect — some iframe hosts treat 302 as an error)
-  const registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
+  const storeId = req.session.ecwid?.store_id;
+  let registries;
+  if (storeId) {
+    registries = db.prepare("SELECT * FROM registry WHERE store_id = ? ORDER BY created_at DESC").all(storeId);
+  } else {
+    registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
+  }
   return res.render("admin/index", { registries, actionError: null, actionInfo: null });
 });
 
@@ -477,7 +646,7 @@ app.get("/admin/registry/new", (req, res) => {
 
 app.post("/admin/registry", (req, res) => {
   const { display_name, event_date } = req.body;
-  const storeId = req.ecwid?.store_id || ECWID_STORE_ID || null;
+  const storeId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || null;
   const type = "online";
   const stmt = db.prepare(
     "INSERT INTO registry (display_name, event_date, registry_type, store_id) VALUES (?, ?, ?, ?)"
@@ -498,9 +667,8 @@ app.get("/admin/registry/:id", async (req, res) => {
   let skuResults = [];
   let skuError = null;
   if (skuSearch) {
-    const storeId = req.ecwid?.store_id || ECWID_STORE_ID;
-    const token = req.ecwid?.access_token || ECWID_ACCESS_TOKEN;
-    const result = await searchEcwidProductsBySku(skuSearch, storeId, token);
+    const creds = resolveStoreCredentials(req.ecwid?.store_id);
+    const result = await searchEcwidProductsBySku(skuSearch, creds.storeId, creds.accessToken);
     skuResults = result.items;
     skuError = result.error;
   }
@@ -510,7 +678,8 @@ app.get("/admin/registry/:id", async (req, res) => {
   const portalLoginUrl = `${BASE_URL}/portal/login`;
   const portalWidgetUrl = `${BASE_URL}/widget/portal.js`;
   const cartWidgetUrl = `${BASE_URL}/widget/cart.js`;
-  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId: ECWID_STORE_ID || '' });
+  const ecwidStoreId = req.ecwid?.store_id || registry.store_id || LEGACY_ECWID_STORE_ID || '';
+  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId });
 });
 
 app.post("/admin/registry/:id/edit", (req, res) => {
@@ -549,14 +718,16 @@ app.get("/admin/settings", (req, res) => {
     return res.status(401).send("Not authorized");
   }
 
+  const storeId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || '';
+  const creds = resolveStoreCredentials(storeId);
   const settings = {
     shippingFlatRate: getShippingFlatRate(),
     shippingFreeThreshold: getShippingFreeThreshold(),
     publicRegistryUrl: getPublicRegistryUrl(),
     registryPageUrl: getRegistryPageUrl(),
-    ecwidStoreId: ECWID_STORE_ID,
+    ecwidStoreId: storeId,
     ecwidClientId: ECWID_CLIENT_ID,
-    hasAccessToken: !!ECWID_ACCESS_TOKEN,
+    hasAccessToken: !!creds.accessToken,
     hasClientSecret: !!ECWID_CLIENT_SECRET,
     baseUrl: BASE_URL,
     nodeEnv: process.env.NODE_ENV || 'development',
@@ -600,14 +771,13 @@ app.post("/admin/settings", (req, res) => {
 app.post("/admin/registry/:id/items", async (req, res) => {
   const registryId = Number(req.params.id);
   const { product_id, product_name, product_sku, desired_qty } = req.body;
-  const storeId = req.ecwid?.store_id || ECWID_STORE_ID;
-  const token = req.ecwid?.access_token || ECWID_ACCESS_TOKEN;
+  const creds = resolveStoreCredentials(req.ecwid?.store_id);
   let productId = Number(product_id || 0);
   let name = product_name?.trim() || null;
   let sku = product_sku?.trim() || null;
 
   if (!productId && sku) {
-    const bySku = await fetchEcwidProductBySku(sku, storeId, token);
+    const bySku = await fetchEcwidProductBySku(sku, creds.storeId, creds.accessToken);
     if (!bySku.product) {
       const msg = encodeURIComponent(bySku.error || "Could not find product by SKU.");
       return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
@@ -618,7 +788,7 @@ app.post("/admin/registry/:id/items", async (req, res) => {
   }
 
   if (productId && (!name || !sku)) {
-    const product = await fetchEcwidProduct(productId, storeId, token);
+    const product = await fetchEcwidProduct(productId, creds.storeId, creds.accessToken);
     if (product) {
       if (!name) name = product.name || null;
       if (!sku) sku = product.sku || null;
@@ -867,10 +1037,11 @@ app.post("/admin/registry/:id/account", async (req, res) => {
 
   // Try to look up the Ecwid customer ID for this email (best-effort)
   let ecwidCustomerId = null;
-  if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID) {
+  const acctCreds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
+  if (acctCreds.accessToken && acctCreds.storeId) {
     try {
-      const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/customers?email=${encodeURIComponent(email)}&limit=1`;
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
+      const url = `https://app.ecwid.com/api/v3/${acctCreds.storeId}/customers?email=${encodeURIComponent(email)}&limit=1`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${acctCreds.accessToken}` } });
       if (resp.ok) {
         const data = await resp.json();
         if (data.items && data.items.length > 0) {
@@ -937,7 +1108,7 @@ app.options("/portal/login", (req, res) => {
 app.get("/portal/login", (req, res) => {
   if (req.session.registrantId) return res.redirect("/portal");
   const error = String(req.query.error || "").trim();
-  res.render("portal/login", { error, ecwidStoreId: ECWID_STORE_ID });
+  res.render("portal/login", { error, ecwidStoreId: req.query.store_id || LEGACY_ECWID_STORE_ID || "" });
 });
 
 // Accepts email from either Ecwid SSO page (form POST) or widget inline embed (JSON fetch)
@@ -1037,9 +1208,9 @@ app.post("/portal/items", requireRegistrant, async (req, res) => {
   let finalSku = sku;
 
   if (sku) {
-    const storeId = ECWID_STORE_ID;
-    const token = ECWID_ACCESS_TOKEN;
-    const result = await fetchEcwidProductBySku(sku, storeId, token);
+    const registry = getRegistryById(registryId);
+    const portalCreds = resolveStoreCredentials(registry?.store_id);
+    const result = await fetchEcwidProductBySku(sku, portalCreds.storeId, portalCreds.accessToken);
     if (result.product) {
       productId = Number(result.product.id);
       finalName = result.product.name || itemName;
@@ -1074,18 +1245,18 @@ app.post("/portal/items", requireRegistrant, async (req, res) => {
 
 // Public pages
 app.get("/registry", (req, res) => {
-  const storeId = req.query.store_id || ECWID_STORE_ID || "";
+  const storeId = req.query.store_id || LEGACY_ECWID_STORE_ID || "";
   res.render("public/registry", { baseUrl: BASE_URL, storeId });
 });
 
 app.get("/registry/:id", (req, res) => {
   const registryId = Number(req.params.id);
-  const storeId = req.query.store_id || ECWID_STORE_ID || "";
+  const storeId = req.query.store_id || LEGACY_ECWID_STORE_ID || "";
   res.render("public/registry-detail", { baseUrl: BASE_URL, registryId, storeId });
 });
 
 app.get("/registry-embed", (req, res) => {
-  const storeId = req.query.store_id || ECWID_STORE_ID || "";
+  const storeId = req.query.store_id || LEGACY_ECWID_STORE_ID || "";
   res.render("public/registry-embed", { storeId });
 });
 
@@ -1128,7 +1299,7 @@ app.get("/api/registries/:id", (req, res) => {
 // ─── Process a full Ecwid order: match items to registries, record purchases,
 // and annotate the Ecwid order with staff notes. Used by both the webhook and
 // the manual sync endpoint.
-async function processEcwidOrder(order) {
+async function processEcwidOrder(order, { storeId: orderStoreId, accessToken: orderAccessToken } = {}) {
   const orderNumber = Number(order.orderNumber || order.vendorOrderNumber || order.id || 0);
   if (!orderNumber) return { recorded: 0, error: "no order number" };
 
@@ -1202,7 +1373,18 @@ async function processEcwidOrder(order) {
   }
 
   // Annotate the Ecwid order with per-item and order-level notes
-  if (matchedRegistries.size > 0 && ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
+  // Resolve credentials for annotation: use passed-in creds, or look up from the first matched registry's store
+  let annotateStoreId = orderStoreId || "";
+  let annotateToken = orderAccessToken || "";
+  if (!annotateToken && matchedRegistries.size > 0) {
+    const firstReg = db.prepare("SELECT store_id FROM registry WHERE id = ?").get([...matchedRegistries][0]);
+    if (firstReg?.store_id) {
+      const creds = resolveStoreCredentials(firstReg.store_id);
+      annotateStoreId = creds.storeId;
+      annotateToken = creds.accessToken;
+    }
+  }
+  if (matchedRegistries.size > 0 && annotateToken && annotateStoreId) {
     try {
       // Fetch full registry info (name, shipping_method, shipping_address) for each matched registry
       const regInfoMap = new Map();
@@ -1290,7 +1472,7 @@ async function processEcwidOrder(order) {
 
       // ── PUT order-level notes to Ecwid ──
       // (Per-item notes not supported by Ecwid API — all info goes in order-level fields)
-      const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderNumber}`;
+      const url = `https://app.ecwid.com/api/v3/${annotateStoreId}/orders/${orderNumber}`;
       const putBody = { privateAdminNotes: staffNote };
       if (customerNote) putBody.orderComments = customerNote;
 
@@ -1299,7 +1481,7 @@ async function processEcwidOrder(order) {
 
       const resp = await fetch(url, {
         method: "PUT",
-        headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${annotateToken}`, "Content-Type": "application/json" },
         body: JSON.stringify(putBody)
       });
 
@@ -1434,13 +1616,13 @@ app.post("/webhooks/ecwid/shipping", express.json(), (req, res) => {
 });
 
 // Fetch full order details from Ecwid REST API
-async function fetchEcwidOrder(orderId) {
-  if (!ECWID_ACCESS_TOKEN || !ECWID_STORE_ID || ECWID_STORE_ID === "STORE_ID_PLACEHOLDER") {
+async function fetchEcwidOrder(orderId, storeId, accessToken) {
+  if (!accessToken || !storeId) {
     return null;
   }
-  const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders/${orderId}`;
+  const url = `https://app.ecwid.com/api/v3/${storeId}/orders/${orderId}`;
   try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!res.ok) {
       console.log(`[ecwid-api] fetch order ${orderId} failed: ${res.status}`);
       return null;
@@ -1488,26 +1670,36 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (r
     return;
   }
 
-  console.log(`[webhook] fetching full order ${orderId} from Ecwid API...`);
-  const order = await fetchEcwidOrder(orderId);
+  // Resolve store credentials from the webhook event's storeId
+  const webhookStoreId = String(event?.storeId || "");
+  const whCreds = resolveStoreCredentials(webhookStoreId);
+  if (!whCreds.accessToken) {
+    console.log(`[webhook] no credentials for store ${webhookStoreId} — cannot fetch order`);
+    return;
+  }
+
+  console.log(`[webhook] fetching full order ${orderId} from Ecwid API (store ${whCreds.storeId})...`);
+  const order = await fetchEcwidOrder(orderId, whCreds.storeId, whCreds.accessToken);
   if (!order) {
     console.log(`[webhook] could not fetch order ${orderId}`);
     return;
   }
 
-  const result = await processEcwidOrder(order);
+  const result = await processEcwidOrder(order, { storeId: whCreds.storeId, accessToken: whCreds.accessToken });
   console.log(`[webhook] order #${orderId} — recorded ${result.recorded} registry purchase(s)`);
 });
 
 // ─── Manual sync: fetch recent orders from Ecwid and process any that contain
 // registry items. Use this to backfill orders placed before the webhook was fixed.
 app.post("/admin/sync-orders", async (req, res) => {
-  if (!ECWID_ACCESS_TOKEN || !ECWID_STORE_ID || ECWID_STORE_ID === "STORE_ID_PLACEHOLDER") {
+  const syncStoreId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || "";
+  const syncCreds = resolveStoreCredentials(syncStoreId);
+  if (!syncCreds.accessToken || !syncCreds.storeId) {
     return res.redirect("/admin?error=" + encodeURIComponent("Ecwid API credentials not configured."));
   }
   try {
-    const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders?limit=50&sortBy=DATE_CREATED&sortDirection=DESC`;
-    const apiRes = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
+    const url = `https://app.ecwid.com/api/v3/${syncCreds.storeId}/orders?limit=50&sortBy=DATE_CREATED&sortDirection=DESC`;
+    const apiRes = await fetch(url, { headers: { Authorization: `Bearer ${syncCreds.accessToken}` } });
     if (!apiRes.ok) {
       return res.redirect("/admin?error=" + encodeURIComponent(`Ecwid API error: ${apiRes.status}`));
     }
@@ -1515,7 +1707,7 @@ app.post("/admin/sync-orders", async (req, res) => {
     const orders = data?.items || [];
     let totalRecorded = 0;
     for (const order of orders) {
-      const result = await processEcwidOrder(order);
+      const result = await processEcwidOrder(order, { storeId: syncCreds.storeId, accessToken: syncCreds.accessToken });
       totalRecorded += result.recorded;
     }
     const msg = `Synced ${orders.length} orders — recorded ${totalRecorded} new registry purchase(s).`;
@@ -1528,27 +1720,40 @@ app.post("/admin/sync-orders", async (req, res) => {
 });
 
 // ─── Auto-sync: poll Ecwid for recent orders every 2 minutes ─────────────────
-if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
+// Iterates all registered stores (from the `stores` table + legacy env var fallback).
+{
   const AUTO_SYNC_INTERVAL = 2 * 60 * 1000; // 2 minutes
   setInterval(async () => {
-    try {
-      const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders?createdFrom=${encodeURIComponent(since)}&limit=50&sortBy=DATE_CREATED&sortDirection=DESC`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
-      if (!res.ok) return;
-      const data = await res.json();
-      const orders = data?.items || [];
-      let recorded = 0;
-      for (const order of orders) {
-        const result = await processEcwidOrder(order);
-        recorded += result.recorded;
+    // Build list of stores to sync
+    const storesToSync = getAllStores().map(s => ({ storeId: s.store_id, accessToken: s.access_token }));
+    // Add legacy env-var store if not already in DB
+    if (LEGACY_ECWID_STORE_ID && LEGACY_ECWID_ACCESS_TOKEN) {
+      if (!storesToSync.some(s => s.storeId === LEGACY_ECWID_STORE_ID)) {
+        storesToSync.push({ storeId: LEGACY_ECWID_STORE_ID, accessToken: LEGACY_ECWID_ACCESS_TOKEN });
       }
-      if (recorded > 0) console.log(`[auto-sync] recorded ${recorded} new registry purchase(s)`);
-    } catch (err) {
-      console.log(`[auto-sync] error: ${err.message}`);
+    }
+    if (storesToSync.length === 0) return;
+
+    for (const store of storesToSync) {
+      try {
+        const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const url = `https://app.ecwid.com/api/v3/${store.storeId}/orders?createdFrom=${encodeURIComponent(since)}&limit=50&sortBy=DATE_CREATED&sortDirection=DESC`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${store.accessToken}` } });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const orders = data?.items || [];
+        let recorded = 0;
+        for (const order of orders) {
+          const result = await processEcwidOrder(order, { storeId: store.storeId, accessToken: store.accessToken });
+          recorded += result.recorded;
+        }
+        if (recorded > 0) console.log(`[auto-sync] store ${store.storeId}: recorded ${recorded} new registry purchase(s)`);
+      } catch (err) {
+        console.log(`[auto-sync] store ${store.storeId} error: ${err.message}`);
+      }
     }
   }, AUTO_SYNC_INTERVAL);
-  console.log("[auto-sync] enabled — polling every 2 minutes");
+  console.log("[auto-sync] enabled — polling every 2 minutes for all stores");
 }
 
 // ─── Lightweight storefront cart script ──────────────────────────────────────
@@ -1833,7 +2038,7 @@ app.get("/widget/registry.js", (req, res) => {
 (function(){
   console.log('[registry-widget] v6 loaded');
   const baseUrl = "${BASE_URL}";
-  const defaultStoreId = "${ECWID_STORE_ID}";
+  const defaultStoreId = "${LEGACY_ECWID_STORE_ID}";
 
   // Inject store fonts if not already present
   if (!document.querySelector('link[data-registry-fonts]')) {
