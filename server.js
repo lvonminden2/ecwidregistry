@@ -1432,12 +1432,12 @@ app.post("/admin/sync-orders", async (req, res) => {
   }
 });
 
-// ─── Auto-sync: poll Ecwid for recent orders every 15 minutes ────────────────
+// ─── Auto-sync: poll Ecwid for recent orders every 2 minutes ─────────────────
 if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHOLDER") {
-  const AUTO_SYNC_INTERVAL = 15 * 60 * 1000; // 15 minutes
+  const AUTO_SYNC_INTERVAL = 2 * 60 * 1000; // 2 minutes
   setInterval(async () => {
     try {
-      const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const since = new Date(Date.now() - 5 * 60 * 1000).toISOString();
       const url = `https://app.ecwid.com/api/v3/${ECWID_STORE_ID}/orders?createdFrom=${encodeURIComponent(since)}&limit=50&sortBy=DATE_CREATED&sortDirection=DESC`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${ECWID_ACCESS_TOKEN}` } });
       if (!res.ok) return;
@@ -1453,7 +1453,7 @@ if (ECWID_ACCESS_TOKEN && ECWID_STORE_ID && ECWID_STORE_ID !== "STORE_ID_PLACEHO
       console.log(`[auto-sync] error: ${err.message}`);
     }
   }, AUTO_SYNC_INTERVAL);
-  console.log("[auto-sync] enabled — polling every 15 minutes");
+  console.log("[auto-sync] enabled — polling every 2 minutes");
 }
 
 // ─── Lightweight storefront cart script ──────────────────────────────────────
