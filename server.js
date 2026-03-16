@@ -1412,15 +1412,14 @@ app.get("/widget/cart.js", (req, res) => {
         html += '<div style="font-weight:600;font-size:14px;color:#333;margin-bottom:4px;">' + esc(regName) + '</div>';
         html += '<ul style="margin:0 0 0 8px;padding:0;list-style:none;">';
         groups[regName].forEach(function(item) {
-          html += '<li style="display:flex;align-items:center;padding:3px 0;font-size:13px;color:#444;">';
-          html += '<span style="flex:1;">\\u2022 ' + esc(item.name);
+          html += '<li style="padding:3px 0;font-size:13px;color:#444;">';
+          html += '\\u2022 ' + esc(item.name);
           html += ' <span style="color:#666;">\\u00D7' + item.regQty + '</span>';
           if (item.cartQty > item.regQty) {
             html += ' <span style="font-size:11px;color:#888;">(' + item.regQty + ' of ' + item.cartQty + ' in cart)</span>';
           }
-          html += '</span>';
-          html += '<button data-reg-remove-pid="' + item.pid + '" data-reg-remove-rid="' + item.rid + '" '
-            + 'style="background:none;border:1px solid #ccc;border-radius:3px;padding:1px 7px;margin-left:8px;cursor:pointer;font-size:12px;color:#888;line-height:1.4;" '
+          html += ' <button data-reg-remove-pid="' + item.pid + '" data-reg-remove-rid="' + item.rid + '" '
+            + 'style="background:none;border:1px solid #ccc;border-radius:3px;padding:0px 5px;cursor:pointer;font-size:11px;color:#999;line-height:1.3;vertical-align:middle;" '
             + 'title="Remove from registry purchase">\\u00D7</button>';
           html += '</li>';
         });
