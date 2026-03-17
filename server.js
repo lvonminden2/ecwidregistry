@@ -2674,9 +2674,10 @@ function deployCraneSection(overrideStoreId) {
   const cfg = { client_id: ECWID_CLIENT_ID, client_secret: ECWID_CLIENT_SECRET, store_id: storeId };
   fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\n");
 
-  // Run async to avoid blocking the server
-  exec("npx @lightspeed/crane@latest deploy", {
-    cwd: path.join(__dirname, "crane-section"),
+  // Build first, then deploy
+  const craneCwd = path.join(__dirname, "crane-section");
+  exec("npx @lightspeed/crane@latest build && npx @lightspeed/crane@latest deploy", {
+    cwd: craneCwd,
     timeout: 120000,
   }, (err, stdout, stderr) => {
     if (stderr) console.log(`[crane] stderr: ${stderr.trim()}`);
