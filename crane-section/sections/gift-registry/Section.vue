@@ -2,31 +2,49 @@
   <section class="gr-section">
     <!-- Header -->
     <div v-if="title || subtitle" class="gr-heading">
-      <h2 v-if="title" class="gr-title">{{ title }}</h2>
-      <p  v-if="subtitle" class="gr-subtitle">{{ subtitle }}</p>
+      <h2 v-if="title" class="gr-title">
+        {{ title }}
+      </h2>
+      <p v-if="subtitle" class="gr-subtitle">
+        {{ subtitle }}
+      </p>
     </div>
 
     <!-- Loading -->
-    <div v-if="loading" class="gr-loading" aria-live="polite">Loading registries…</div>
+    <div v-if="loading" class="gr-loading" aria-live="polite">
+      Loading registries…
+    </div>
 
     <!-- Error -->
-    <div v-else-if="error" class="gr-error" role="alert">{{ error }}</div>
+    <div v-else-if="error" class="gr-error" role="alert">
+      {{ error }}
+    </div>
 
     <!-- Detail view -->
     <template v-else-if="activeRegistry">
-      <button class="gr-back-btn" @click="activeRegistry = null">← {{ backLabel }}</button>
+      <button class="gr-back-btn" @click="activeRegistry = null">
+        ← {{ backLabel }}
+      </button>
       <div class="gr-detail-header">
-        <h3 class="gr-detail-title">{{ activeRegistry.display_name }}</h3>
-        <p v-if="activeRegistry.event_date" class="gr-detail-date">{{ formatDate(activeRegistry.event_date) }}</p>
+        <h3 class="gr-detail-title">
+          {{ activeRegistry.display_name }}
+        </h3>
+        <p v-if="activeRegistry.event_date" class="gr-detail-date">
+          {{ formatDate(activeRegistry.event_date) }}
+        </p>
       </div>
       <div v-if="statusMsg" :class="['gr-status', statusMsg.ok ? 'gr-status--ok' : 'gr-status--err']">
         {{ statusMsg.text }}
       </div>
-      <div v-if="items.length === 0" class="gr-empty">No items on this registry.</div>
+      <div v-if="items.length === 0" class="gr-empty">
+        No items on this registry.
+      </div>
       <div v-else class="gr-items">
         <div v-for="item in items" :key="item.id" class="gr-item">
           <div class="gr-item-info">
-            <div class="gr-item-name">{{ item.product_name || 'Registry item' }}</div>
+            <div class="gr-item-name">
+              {{ item.product_name || 'Registry item' }}
+            </div>
             <div class="gr-item-meta">
               Wanted: {{ item.desired_qty }} &nbsp;·&nbsp;
               Purchased: {{ item.purchased_qty }} &nbsp;·&nbsp;
@@ -41,7 +59,9 @@
           >
             {{ addingId === item.product_id ? 'Adding…' : addToCartLabel }}
           </button>
-          <span v-else-if="item.still_needed === 0" class="gr-fulfilled">✓ Fulfilled</span>
+          <span v-else-if="item.still_needed === 0" class="gr-fulfilled">
+            ✓ Fulfilled
+          </span>
         </div>
       </div>
     </template>
@@ -55,7 +75,9 @@
         :placeholder="searchPlaceholder"
         @input="onSearch"
       />
-      <div v-if="registries.length === 0" class="gr-empty">{{ emptyMessage }}</div>
+      <div v-if="registries.length === 0" class="gr-empty">
+        {{ emptyMessage }}
+      </div>
       <div v-else :class="['gr-list', gridStyle]">
         <div
           v-for="reg in registries"
@@ -66,9 +88,13 @@
           @click="openRegistry(reg.id)"
           @keydown.enter="openRegistry(reg.id)"
         >
-          <div class="gr-card-name">{{ reg.display_name }}</div>
+          <div class="gr-card-name">
+            {{ reg.display_name }}
+          </div>
           <div class="gr-card-meta">
-            <span v-if="reg.event_date">{{ formatDate(reg.event_date) }} · </span>
+            <span v-if="reg.event_date">
+              {{ formatDate(reg.event_date) }} ·
+            </span>
             {{ reg.item_count }} items
           </div>
         </div>
@@ -79,37 +105,63 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { useInputboxElementContent, useTextareaElementContent, useSelectboxElementDesign } from '@lightspeed/crane';
-import type { Content } from './settings/content';
-import type { Design }  from './settings/design';
+import {
+  useInputboxElementContent,
+  useSelectboxElementDesign,
+} from '@lightspeed/crane-api';
 
 // ── Content settings (editable in Ecwid Site Editor) ──────────────────────
-const titleSetting          = useInputboxElementContent<Content>('title');
-const subtitleSetting       = useTextareaElementContent<Content>('subtitle');
-const serverUrlSetting      = useInputboxElementContent<Content>('server_url');
-const searchPlaceholderSetting = useInputboxElementContent<Content>('search_placeholder');
-const addToCartLabelSetting = useInputboxElementContent<Content>('add_to_cart_label');
-const backLabelSetting      = useInputboxElementContent<Content>('back_label');
-const emptyMessageSetting   = useInputboxElementContent<Content>('empty_message');
-const columnsSetting        = useSelectboxElementDesign<Design>('columns');
+const titleSetting = useInputboxElementContent('title');
+const subtitleSetting = useInputboxElementContent('subtitle');
+const serverUrlSetting = useInputboxElementContent('server_url');
+const searchPlaceholderSetting = useInputboxElementContent('search_placeholder');
+const addToCartLabelSetting = useInputboxElementContent('add_to_cart_label');
+const backLabelSetting = useInputboxElementContent('back_label');
+const emptyMessageSetting = useInputboxElementContent('empty_message');
+const columnsSetting = useSelectboxElementDesign('columns');
 
-const title            = computed(() => titleSetting.value          ?? 'Gift Registries');
-const subtitle         = computed(() => subtitleSetting.value       ?? '');
-const serverUrl        = computed(() => (serverUrlSetting.value     ?? '').replace(/\/$/, ''));
-const searchPlaceholder = computed(() => searchPlaceholderSetting.value ?? 'Search by name…');
-const addToCartLabel   = computed(() => addToCartLabelSetting.value ?? 'Add to cart');
-const backLabel        = computed(() => backLabelSetting.value      ?? 'Back');
-const emptyMessage     = computed(() => emptyMessageSetting.value   ?? 'No registries found.');
+const title = computed(() => titleSetting.value ?? 'Gift Registries');
+const subtitle = computed(() => subtitleSetting.value ?? '');
+const serverUrl = computed(
+  () => (serverUrlSetting.value ?? '').replace(/\/$/, ''),
+);
+const searchPlaceholder = computed(
+  () => searchPlaceholderSetting.value ?? 'Search by name…',
+);
+const addToCartLabel = computed(
+  () => addToCartLabelSetting.value ?? 'Add to cart',
+);
+const backLabel = computed(() => backLabelSetting.value ?? 'Back');
+const emptyMessage = computed(
+  () => emptyMessageSetting.value ?? 'No registries found.',
+);
 
 const gridStyle = computed(() => {
   const cols = columnsSetting.value ?? 'auto';
   return cols === 'auto' ? 'gr-list--auto' : `gr-list--${cols}col`;
 });
 
+// ── Types ─────────────────────────────────────────────────────────────────
+interface Registry {
+  id: number;
+  display_name: string;
+  event_date?: string;
+  item_count?: number;
+}
+
+interface RegistryItem {
+  id: number;
+  product_id?: number;
+  product_name?: string;
+  desired_qty: number;
+  purchased_qty: number;
+  still_needed: number;
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
-const registries    = ref<any[]>([]);
-const items         = ref<any[]>([]);
-const activeRegistry = ref<any>(null);
+const registries    = ref<Registry[]>([]);
+const items         = ref<RegistryItem[]>([]);
+const activeRegistry = ref<Registry | null>(null);
 const loading       = ref(true);
 const error         = ref('');
 const search        = ref('');
@@ -126,7 +178,8 @@ function formatDate(str: string) {
 
 function getStoreId(): string {
   if (typeof window === 'undefined') return '';
-  const w = window as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
   return String(w.Ecwid?.getOwnerId?.() ?? w.ecwid_store_id ?? '');
 }
 
@@ -142,8 +195,9 @@ async function loadRegistries(q = '') {
     const res = await fetch(`${serverUrl.value}/api/registries?${params}`);
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     registries.value = await res.json();
-  } catch (e: any) {
-    error.value = `Could not load registries: ${e.message}`;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    error.value = `Could not load registries: ${msg}`;
   } finally {
     loading.value = false;
   }
@@ -159,8 +213,9 @@ async function openRegistry(id: number) {
     const data = await res.json();
     activeRegistry.value = data.registry;
     items.value          = data.items ?? [];
-  } catch (e: any) {
-    error.value = `Could not load registry: ${e.message}`;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    error.value = `Could not load registry: ${msg}`;
   } finally {
     loading.value = false;
   }
@@ -173,12 +228,13 @@ function onSearch() {
 }
 
 // ── Cart integration ──────────────────────────────────────────────────────
-function trackItem(productId: number, registry: any) {
+function trackItem(productId: number, registry: Registry) {
   try {
     const stored = JSON.parse(localStorage.getItem('_reg_items') ?? '{}');
     const pid    = String(productId);
-    let entries: any[] = Array.isArray(stored[pid]) ? stored[pid] : [];
-    const idx = entries.findIndex((e: any) => e.rid === registry.id);
+    const entries: Array<{ rid: number; name: string; qty: number }> =
+      Array.isArray(stored[pid]) ? stored[pid] : [];
+    const idx = entries.findIndex((e) => e.rid === registry.id);
     if (idx >= 0) {
       entries[idx].qty = (entries[idx].qty ?? 1) + 1;
     } else {
@@ -186,11 +242,12 @@ function trackItem(productId: number, registry: any) {
     }
     stored[pid] = entries;
     localStorage.setItem('_reg_items', JSON.stringify(stored));
-  } catch (_) {}
+  } catch { /* localStorage may be unavailable */ }
 }
 
-async function addToCart(item: any) {
-  const w = window as any;
+async function addToCart(item: RegistryItem) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
   if (!w.Ecwid?.Cart?.addProduct) {
     statusMsg.value = { ok: false, text: 'Cart not available — try from the product page.' };
     return;
