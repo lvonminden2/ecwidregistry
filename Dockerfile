@@ -13,4 +13,4 @@ RUN cd crane-section && npm install
 COPY . .
 
 EXPOSE 3000
-CMD cd crane-section && npm run deploy; cd .. && node server.js
+CMD ["node", "server.js"]
