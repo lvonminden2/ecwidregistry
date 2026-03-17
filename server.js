@@ -2671,7 +2671,7 @@ function deployCraneSection(overrideStoreId) {
   console.log(`[crane] deploying section for store_id=${storeId}`);
 
   const configPath = path.join(__dirname, "crane-section", "crane.config.json");
-  const cfg = { client_id: ECWID_CLIENT_ID, client_secret: ECWID_CLIENT_SECRET, store_id: storeId };
+  const cfg = { app_client_id: ECWID_CLIENT_ID, app_secret_key: ECWID_CLIENT_SECRET, store_id: storeId };
   fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\n");
 
   // Build first, then deploy
