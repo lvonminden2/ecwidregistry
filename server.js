@@ -6,6 +6,7 @@ import fs from "fs";
 import dotenv from "dotenv";
 import session from "express-session";
 import crypto from "crypto";
+import { exec } from "child_process";
 
 dotenv.config();
 
@@ -2674,7 +2675,6 @@ function deployCraneSection(overrideStoreId) {
   fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\n");
 
   // Run async to avoid blocking the server
-  const { exec } = require("child_process");
   exec("npx @lightspeed/crane@latest deploy", {
     cwd: path.join(__dirname, "crane-section"),
     timeout: 120000,
