@@ -1,8 +1,9 @@
-// Generates crane.config.json from environment variables.
+// Generates crane.config.json from environment variables + database.
 // Reads ../.env automatically if present (for local development).
 import { writeFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -15,13 +16,34 @@ if (existsSync(envPath)) {
 
 const clientId     = process.env.ECWID_CLIENT_ID;
 const clientSecret = process.env.ECWID_CLIENT_SECRET;
-const storeId      = process.env.ECWID_STORE_ID;
+let   storeId      = process.env.ECWID_STORE_ID;
 
-if (!clientId || !clientSecret || !storeId) {
-  console.error('Missing required env vars: ECWID_CLIENT_ID, ECWID_CLIENT_SECRET, ECWID_STORE_ID');
+// If no ECWID_STORE_ID env var, pull the first store from the SQLite database
+if (!storeId) {
+  const dbPath = resolve(__dirname, '../data/registry.db');
+  if (existsSync(dbPath)) {
+    const require = createRequire(import.meta.url);
+    const Database = require('better-sqlite3');
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.prepare('SELECT store_id FROM stores LIMIT 1').get();
+    db.close();
+    if (row) {
+      storeId = row.store_id;
+      console.log(`Using store_id=${storeId} from database.`);
+    }
+  }
+}
+
+if (!clientId || !clientSecret) {
+  console.error('Missing required env vars: ECWID_CLIENT_ID, ECWID_CLIENT_SECRET');
+  process.exit(1);
+}
+
+if (!storeId) {
+  console.warn('No ECWID_STORE_ID env var and no stores in database — skipping crane deploy.');
   process.exit(1);
 }
 
 const config = { client_id: clientId, client_secret: clientSecret, store_id: storeId };
 writeFileSync(resolve(__dirname, 'crane.config.json'), JSON.stringify(config, null, 2) + '\n');
-console.log('crane.config.json generated from environment variables.');
+console.log('crane.config.json generated successfully.');
