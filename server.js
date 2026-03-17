@@ -2676,7 +2676,8 @@ function deployCraneSection(overrideStoreId) {
 
   // Build first, then deploy
   const craneCwd = path.join(__dirname, "crane-section");
-  exec("npx @lightspeed/crane@latest build && npx @lightspeed/crane@latest deploy", {
+  // Use local crane (3.1.0) — npx @latest pulls 3.2.1 which has a breaking change
+  exec("npx @lightspeed/crane build && npx @lightspeed/crane deploy", {
     cwd: craneCwd,
     timeout: 120000,
   }, (err, stdout, stderr) => {
