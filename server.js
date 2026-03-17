@@ -532,6 +532,8 @@ app.get("/ecwid/iframe", (req, res) => {
     if (storeId && accessToken) {
       upsertStore(storeId, accessToken, publicToken);
       console.log(`[ecwid-iframe] store ${storeId} credentials saved`);
+      // Trigger crane deploy if it hasn't run yet (e.g. volume wasn't ready at startup)
+      deployCraneSection();
     }
   } else if (payload) {
     console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET — skipping payload verification");
@@ -2646,38 +2648,41 @@ app.get("/", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Registry app running at ${BASE_URL}`);
-  deployCraneSection();
+  // Railway volumes mount after the process starts; wait 5s for the volume
+  setTimeout(() => deployCraneSection(), 5000);
 });
 
-// ─── Crane section deploy (runs once after server starts) ─────────────────────
+// ─── Crane section deploy ─────────────────────────────────────────────────────
+let craneDeployed = false;
 function deployCraneSection() {
+  if (craneDeployed) return;
   if (!ECWID_CLIENT_ID || !ECWID_CLIENT_SECRET) {
     console.log("[crane] skipping — ECWID_CLIENT_ID or ECWID_CLIENT_SECRET not set");
     return;
   }
-  // Get store_id from DB or legacy env var
   const stores = getAllStores();
   const storeId = stores.length > 0 ? stores[0].store_id : LEGACY_ECWID_STORE_ID;
   if (!storeId) {
-    console.log("[crane] skipping — no stores in database yet");
+    console.log("[crane] skipping — no stores in database yet (will retry when a store is added)");
     return;
   }
+  craneDeployed = true;
   console.log(`[crane] deploying section for store_id=${storeId}`);
 
   const configPath = path.join(__dirname, "crane-section", "crane.config.json");
   const config = { client_id: ECWID_CLIENT_ID, client_secret: ECWID_CLIENT_SECRET, store_id: storeId };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 
-  import("child_process").then(({ execSync }) => {
-    try {
-      const out = execSync("npx @lightspeed/crane@latest deploy", {
-        cwd: path.join(__dirname, "crane-section"),
-        timeout: 60000,
-        stdio: "pipe",
-      });
-      console.log(`[crane] deploy succeeded:\n${out.toString()}`);
-    } catch (err) {
-      console.log(`[crane] deploy failed: ${err.stderr?.toString() || err.message}`);
-    }
-  });
+  const { execSync } = require("child_process");
+  try {
+    const out = execSync("npx @lightspeed/crane@latest deploy", {
+      cwd: path.join(__dirname, "crane-section"),
+      timeout: 60000,
+      stdio: "pipe",
+    });
+    console.log(`[crane] deploy succeeded:\n${out.toString()}`);
+  } catch (err) {
+    craneDeployed = false; // allow retry on failure
+    console.log(`[crane] deploy failed: ${err.stderr?.toString() || err.message}`);
+  }
 }
