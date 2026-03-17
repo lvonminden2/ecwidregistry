@@ -9,12 +9,14 @@
     "build":  "node generate-config.js && npx @lightspeed/crane@latest build",
     "deploy": "node generate-config.js && npx @lightspeed/crane@latest deploy"
   },
+  "dependencies": {
+    "vue": "^3.4.0"
+  },
   "devDependencies": {
     "@lightspeed/crane": "latest",
     "@lightspeed/eslint-config-crane": "latest",
     "dotenv": "^16.0.0",
     "sass": "^1.0.0",
-    "vite": "^5.0.0",
-    "vue": "^3.4.0"
+    "vite": "^5.0.0"
   }
 }
