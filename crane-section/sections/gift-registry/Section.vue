@@ -120,20 +120,35 @@ const backLabelSetting = useInputboxElementContent('back_label');
 const emptyMessageSetting = useInputboxElementContent('empty_message');
 const columnsSetting = useSelectboxElementDesign('columns');
 
-const title = computed(() => titleSetting.value ?? 'Gift Registries');
-const subtitle = computed(() => subtitleSetting.value ?? '');
+const DEFAULT_SERVER =
+  'https://ecwidregistry-production.up.railway.app';
+
+function resolveLabel(val: string | undefined, fallback: string): string {
+  if (!val || val.startsWith('$label.')) return fallback;
+  return val;
+}
+
+const title = computed(
+  () => resolveLabel(titleSetting.value, 'Gift Registries'),
+);
+const subtitle = computed(
+  () => resolveLabel(subtitleSetting.value, ''),
+);
 const serverUrl = computed(
-  () => (serverUrlSetting.value ?? '').replace(/\/$/, ''),
+  () => resolveLabel(serverUrlSetting.value, DEFAULT_SERVER)
+    .replace(/\/$/, ''),
 );
 const searchPlaceholder = computed(
-  () => searchPlaceholderSetting.value ?? 'Search by name…',
+  () => resolveLabel(searchPlaceholderSetting.value, 'Search by name…'),
 );
 const addToCartLabel = computed(
-  () => addToCartLabelSetting.value ?? 'Add to cart',
+  () => resolveLabel(addToCartLabelSetting.value, 'Add to cart'),
 );
-const backLabel = computed(() => backLabelSetting.value ?? 'Back');
+const backLabel = computed(
+  () => resolveLabel(backLabelSetting.value, 'Back'),
+);
 const emptyMessage = computed(
-  () => emptyMessageSetting.value ?? 'No registries found.',
+  () => resolveLabel(emptyMessageSetting.value, 'No registries found.'),
 );
 
 const gridStyle = computed(() => {

@@ -1,4 +1,6 @@
-export const translations = {
+import { translation } from '@lightspeed/crane-api';
+
+export default translation.init({
   en: {
     '$label.title': 'Section title',
     '$label.title.default': 'Gift Registries',
@@ -28,4 +30,4 @@ export const translations = {
     '$label.columns_3': '3',
     '$label.columns_4': '4',
   },
-};
+});
