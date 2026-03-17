@@ -1,8 +1,3 @@
-[build]
-builder = "nixpacks"
-buildCommand = "npm install && cd crane-section && npm install && cd .."
-
 [deploy]
-startCommand = "cd crane-section && npm run deploy; cd .. && node server.js"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
