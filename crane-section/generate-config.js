@@ -44,6 +44,6 @@ if (!storeId) {
   process.exit(1);
 }
 
-const config = { client_id: clientId, client_secret: clientSecret, store_id: storeId };
+const config = { app_client_id: clientId, app_secret_key: clientSecret, store_id: storeId };
 writeFileSync(resolve(__dirname, 'crane.config.json'), JSON.stringify(config, null, 2) + '\n');
 console.log('crane.config.json generated successfully.');
