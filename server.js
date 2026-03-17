@@ -2679,11 +2679,13 @@ function deployCraneSection(overrideStoreId) {
     cwd: path.join(__dirname, "crane-section"),
     timeout: 120000,
   }, (err, stdout, stderr) => {
+    if (stderr) console.log(`[crane] stderr: ${stderr.trim()}`);
+    if (stdout) console.log(`[crane] stdout: ${stdout.trim()}`);
     if (err) {
       craneDeployed = false; // allow retry
-      console.log(`[crane] deploy failed: ${stderr || err.message}`);
+      console.log(`[crane] deploy failed (exit code ${err.code}): ${err.message}`);
     } else {
-      console.log(`[crane] deploy succeeded: ${stdout.trim()}`);
+      console.log("[crane] deploy succeeded");
     }
   });
 }
