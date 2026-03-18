@@ -9,25 +9,25 @@ export default showcase.init({
   blockName: '$label.showcase_1.blockName',
   content: {
     title: content.default.inputbox({
-      text: '$label.title.default',
+      text: 'Gift Registries',
     }),
     subtitle: content.default.inputbox({
-      text: '$label.subtitle.default',
+      text: '',
     }),
     server_url: content.default.inputbox({
-      text: '$label.server_url.default',
+      text: 'https://ecwidregistry-production.up.railway.app',
     }),
     search_placeholder: content.default.inputbox({
-      text: '$label.search_placeholder.default',
+      text: 'Search by name…',
     }),
     add_to_cart_label: content.default.inputbox({
-      text: '$label.add_to_cart_label.default',
+      text: 'Add to cart',
     }),
     back_label: content.default.inputbox({
-      text: '$label.back_label.default',
+      text: 'Back',
     }),
     empty_message: content.default.inputbox({
-      text: '$label.empty_message.default',
+      text: 'No registries found.',
     }),
   },
   design: {
