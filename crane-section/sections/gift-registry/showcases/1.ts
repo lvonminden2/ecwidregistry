@@ -6,28 +6,35 @@ import {
 
 export default showcase.init({
   showcaseId: '1',
+  previewImage: {
+    set: {
+      ORIGINAL: {
+        url: 'showcase_preview.png',
+      },
+    },
+  },
   blockName: '$label.showcase_1.blockName',
   content: {
     title: content.default.inputbox({
-      text: 'Gift Registries',
+      text: '$label.title.default',
     }),
     subtitle: content.default.inputbox({
-      text: '',
+      text: '$label.subtitle.default',
     }),
     server_url: content.default.inputbox({
-      text: 'https://ecwidregistry-production.up.railway.app',
+      text: '$label.server_url.default',
     }),
     search_placeholder: content.default.inputbox({
-      text: 'Search by name…',
+      text: '$label.search_placeholder.default',
     }),
     add_to_cart_label: content.default.inputbox({
-      text: 'Add to cart',
+      text: '$label.add_to_cart_label.default',
     }),
     back_label: content.default.inputbox({
-      text: 'Back',
+      text: '$label.back_label.default',
     }),
     empty_message: content.default.inputbox({
-      text: 'No registries found.',
+      text: '$label.empty_message.default',
     }),
   },
   design: {

@@ -5,15 +5,15 @@
   "type": "module",
   "scripts": {
     "generate-config": "node generate-config.js",
-    "dev":    "node generate-config.js && npx @lightspeed/crane@latest dev",
-    "build":  "node generate-config.js && npx @lightspeed/crane@latest build",
-    "deploy": "node generate-config.js && npx @lightspeed/crane@latest deploy"
+    "dev":    "node generate-config.js && npx @lightspeed/crane dev",
+    "build":  "node generate-config.js && npx @lightspeed/crane build",
+    "deploy": "node generate-config.js && npx @lightspeed/crane deploy"
   },
   "dependencies": {
     "vue": "^3.4.0"
   },
   "devDependencies": {
-    "@lightspeed/crane": "latest",
+    "@lightspeed/crane": "3.1.0",
     "@lightspeed/eslint-config-crane": "latest",
     "dotenv": "^16.0.0",
     "sass": "^1.0.0",
