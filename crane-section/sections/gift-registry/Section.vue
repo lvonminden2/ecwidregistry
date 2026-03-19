@@ -428,41 +428,13 @@ async function addToCart(item: RegistryItem) {
   await doAddToCart(item);
 }
 
-// ── Cart change handler: guards against mixing + keeps _cart_pids fresh ────
+// ── Cart change handler: keeps _cart_pids fresh for detectCartConflict ─────
+// Guard logic (ejecting regular items when registry session is active) lives
+// in the globally-injected cart-guard.js so it runs on ALL pages, not just
+// the registry page.
 function onCartChanged(cart: { items?: unknown[]; products?: unknown[] }) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = window as Record<string, any>;
-  const raw = (cart?.items ?? (cart as Record<string, unknown>)?.products ?? []) as Array<Record<string, unknown>>;
-
-  // Guard: if registry items are in the cart, reject any non-registry item
-  // that was just added (e.g. via the native Ecwid store UI).
-  let regItems: Record<string, Array<{ rid: number; name: string; qty: number }>> = {};
-  try { regItems = JSON.parse(localStorage.getItem('_reg_items') ?? '{}'); } catch { /* ignore */ }
-
-  if (Object.keys(regItems).length > 0) {
-    for (let j = raw.length - 1; j >= 0; j--) {
-      const product = (raw[j].product as Record<string, unknown>) ?? raw[j];
-      const pid = String((product.id as number) ?? (raw[j].productId as number) ?? 0);
-      if (pid === '0') continue;
-      const tracked = regItems[pid];
-      if (!tracked || tracked.length === 0) {
-        // Non-registry item detected — remove it and warn
-        if (w.Ecwid?.Cart?.removeProduct) w.Ecwid.Cart.removeProduct(j);
-        if (!conflictModal.value) {
-          conflictModal.value = {
-            message: 'A regular item could not be added — your cart already contains registry items.',
-            clearLabel: 'Clear Registry Cart',
-            keepLabel: 'Keep Registry Items',
-            onClear: async () => { await clearCart(); },
-            onKeep: () => { /* item already removed, keep registry items */ },
-          };
-        }
-      }
-    }
-  }
-
-  // Update _cart_pids cache for detectCartConflict
   try {
+    const raw = (cart?.items ?? (cart as Record<string, unknown>)?.products ?? []) as Array<Record<string, unknown>>;
     const pids = raw
       .map((item) => {
         const product = (item.product as Record<string, unknown>) ?? item;
@@ -483,6 +455,15 @@ onMounted(() => {
   }
   if (w.Ecwid?.Cart?.get) {
     w.Ecwid.Cart.get(onCartChanged);
+  }
+
+  // Inject the global cart guard once — it persists across SPA navigation so
+  // the guard runs even when the user is on a regular product page.
+  if (!document.querySelector('script[data-registry-guard]')) {
+    const script = document.createElement('script');
+    script.setAttribute('data-registry-guard', '1');
+    script.src = `${serverUrl.value}/widget/cart-guard.js`;
+    document.head.appendChild(script);
   }
 });
 
