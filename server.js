@@ -2401,17 +2401,20 @@ app.get("/widget/registry.js", (req, res) => {
       }).join('');
 
       const back = isEmbed ? '<button class="reg-back-btn">Back to Registries</button>' : '';
-      const photoBanner = registry.photo
-        ? '<div class="reg-banner"><img class="reg-banner-img" src="' + esc(registry.photo) + '" alt="Registry photo" /></div>'
-        : '';
-      const descriptionHtml = registry.description
-        ? '<div class="reg-description">' + esc(registry.description) + '</div>'
+      const infoCard = (registry.photo || registry.description)
+        ? '<div class="reg-info-card">' +
+            (registry.photo
+              ? '<img class="reg-info-photo" src="' + esc(registry.photo) + '" alt="Registry photo" />'
+              : '') +
+            (registry.description
+              ? '<p class="reg-info-desc">' + esc(registry.description) + '</p>'
+              : '') +
+          '</div>'
         : '';
       container.innerHTML =
         '<div class="reg-header">' + esc(registry.display_name) + '</div>' +
         '<div class="reg-sub">' + esc(fmtDate(registry.event_date)) + '</div>' +
-        photoBanner +
-        descriptionHtml +
+        infoCard +
         '<div class="reg-status"></div>' +
         back +
         '<div class="reg-items">' + rows + '</div>';

@@ -33,10 +33,17 @@
           {{ formatDate(activeRegistry.event_date) }}
         </p>
       </div>
-      <img v-if="activeRegistry.photo" class="gr-banner-img" :src="activeRegistry.photo" alt="Registry photo" />
-      <p v-if="activeRegistry.description" class="gr-description">
-        {{ activeRegistry.description }}
-      </p>
+      <div v-if="activeRegistry.photo || activeRegistry.description" class="gr-registry-meta">
+        <img
+          v-if="activeRegistry.photo"
+          class="gr-registry-photo"
+          :src="activeRegistry.photo"
+          alt="Registry photo"
+        />
+        <p v-if="activeRegistry.description" class="gr-registry-description">
+          {{ activeRegistry.description }}
+        </p>
+      </div>
       <div v-if="statusMsg" :class="['gr-status', statusMsg.ok ? 'gr-status--ok' : 'gr-status--err']">
         {{ statusMsg.text }}
       </div>
@@ -429,18 +436,29 @@ watch(serverUrl, () => {
   flex-shrink: 0;
 }
 
-.gr-banner-img {
-  width: 100%;
-  max-height: 300px;
+.gr-registry-meta {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 20px;
+  opacity: 0.9;
+}
+.gr-registry-photo {
+  width: 120px;
+  height: 120px;
   object-fit: cover;
   border-radius: 4px;
-  margin-bottom: 12px;
+  flex-shrink: 0;
 }
-.gr-description {
-  margin: 0 0 16px;
-  color: var(--gr-muted, #666);
-  font-size: 0.95em;
-  line-height: 1.5;
+.gr-registry-description {
+  flex: 1;
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  opacity: 0.8;
 }
 .gr-item-thumb {
   width: 64px;
@@ -451,6 +469,8 @@ watch(serverUrl, () => {
 }
 
 @media (max-width: 600px) {
+  .gr-registry-meta { flex-direction: column; }
+  .gr-registry-photo { width: 100%; height: 200px; }
   .gr-item  { flex-direction: column; align-items: flex-start; }
   .gr-btn   { width: 100%; text-align: center; }
   .gr-list--2col,
