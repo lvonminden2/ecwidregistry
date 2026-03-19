@@ -8,7 +8,9 @@
         @click.self="conflictModal?.onKeep(); conflictModal = null"
       >
         <div class="gr-conflict-modal">
-          <div class="gr-conflict-title">&#9888; Cart Conflict</div>
+          <div class="gr-conflict-title">
+            &#9888; Cart Conflict
+          </div>
           <div class="gr-conflict-msg">
             {{ conflictModal.message }} Would you like to clear your cart and add this item, or keep your current cart?
           </div>
@@ -16,11 +18,15 @@
             <button
               class="gr-conflict-keep"
               @click="conflictModal?.onKeep(); conflictModal = null"
-            >Keep Current Items</button>
+            >
+              Keep Current Items
+            </button>
             <button
               class="gr-conflict-clear"
               @click="conflictModal?.onClear(); conflictModal = null"
-            >Clear Cart &amp; Add</button>
+            >
+              Clear Cart &amp; Add
+            </button>
           </div>
         </div>
       </div>
