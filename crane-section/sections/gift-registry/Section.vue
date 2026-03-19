@@ -286,34 +286,54 @@ function onSearch() {
 
 // ── Cart conflict detection ────────────────────────────────────────────────
 function detectCartConflict(newRegistryId: number): Promise<{ message: string } | null> {
+  // Step 1: Check _reg_items for different-registry conflict (no Cart.get needed)
+  let regItems: Record<string, Array<{ rid: number; name: string; qty: number }>> = {};
+  try { regItems = JSON.parse(localStorage.getItem('_reg_items') ?? '{}'); } catch { /* ignore */ }
+
+  let existingRegName = '';
+  let hasDifferentRegistry = false;
+  for (const pid of Object.keys(regItems)) {
+    const entries = regItems[pid];
+    if (!Array.isArray(entries)) continue;
+    for (const e of entries) {
+      if (e.rid !== newRegistryId) {
+        hasDifferentRegistry = true;
+        existingRegName = e.name || 'another registry';
+        break;
+      }
+    }
+    if (hasDifferentRegistry) break;
+  }
+
+  if (hasDifferentRegistry) {
+    return Promise.resolve({ message: `Your cart has items from "${existingRegName}".` });
+  }
+
+  // Step 2: Check Cart.get for regular (non-registry) items (best effort, with timeout)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as Record<string, any>;
   if (!w.Ecwid?.Cart?.get) return Promise.resolve(null);
-  let regItems: Record<string, Array<{ rid: number; name: string; qty: number }>> = {};
-  try { regItems = JSON.parse(localStorage.getItem('_reg_items') ?? '{}'); } catch { /* ignore */ }
+
   return new Promise((resolve) => {
+    let resolved = false;
     w.Ecwid.Cart.get((cart: { items?: unknown[] }) => {
+      if (resolved) return;
+      resolved = true;
       const items = cart?.items ?? [];
-      if (!items.length) { resolve(null); return; }
-      let conflict: { message: string } | null = null;
       for (const cartItem of items as Record<string, unknown>[]) {
         const product = (cartItem.product as Record<string, unknown>) ?? cartItem;
         const pid = String((product.id as number) ?? (cartItem.productId as number) ?? 0);
         if (pid === '0') continue;
         const tracked = regItems[pid];
         if (!tracked || tracked.length === 0) {
-          conflict = { message: 'Your cart contains items from regular shopping.' };
-          break;
-        }
-        const rids = tracked.map((e) => e.rid);
-        if (!rids.includes(newRegistryId)) {
-          const regName = tracked[0]?.name ?? 'another registry';
-          conflict = { message: `Your cart has items from "${regName}".` };
-          break;
+          resolve({ message: 'Your cart contains items from regular shopping.' });
+          return;
         }
       }
-      resolve(conflict);
+      resolve(null);
     });
+    // Timeout: don't hang if Cart.get never calls back
+    setTimeout(() => { if (!resolved) { resolved = true; resolve(null); } }, 2000);
   });
 }
 
