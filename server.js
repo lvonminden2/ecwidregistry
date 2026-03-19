@@ -2117,6 +2117,84 @@ app.get("/widget/registry.js", (req, res) => {
     } catch(e) {}
   }
 
+  // ── Cart conflict detection ──────────────────────────────────────────────
+  // Detects if adding a registry item would mix it with items from a different
+  // registry or with regular (non-registry) shopping items.
+  function detectCartConflict(newRegistryId, callback) {
+    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') {
+      callback(null); return;
+    }
+    var regItems = {};
+    try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+    Ecwid.Cart.get(function(cart) {
+      var items = (cart && cart.items) || [];
+      if (!items.length) { callback(null); return; }
+      var conflict = null;
+      for (var i = 0; i < items.length; i++) {
+        var product = (items[i] && items[i].product) || items[i];
+        var pid = String((product && product.id) || items[i].productId || 0);
+        if (pid === '0') continue;
+        var tracked = regItems[pid];
+        if (!tracked || (Array.isArray(tracked) ? tracked.length === 0 : false)) {
+          conflict = { type: 'regular', message: 'Your cart contains items from regular shopping.' };
+          break;
+        }
+        var entries = Array.isArray(tracked) ? tracked : [tracked];
+        var rids = entries.map(function(e) { return e.rid; });
+        if (rids.indexOf(newRegistryId) === -1) {
+          var regName = (entries[0] && entries[0].name) || 'another registry';
+          conflict = { type: 'registry', message: 'Your cart has items from "' + regName + '".' };
+          break;
+        }
+      }
+      callback(conflict);
+    });
+  }
+
+  // ── Clear cart and then run a callback ──────────────────────────────────
+  function clearCartAndProceed(proceed) {
+    localStorage.removeItem('_reg_items');
+    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') {
+      proceed(); return;
+    }
+    Ecwid.Cart.get(function(cart) {
+      var items = (cart && cart.items) || [];
+      // Remove in reverse index order to avoid index shifting
+      for (var i = items.length - 1; i >= 0; i--) {
+        Ecwid.Cart.removeProduct(i);
+      }
+      setTimeout(proceed, 400);
+    });
+  }
+
+  // ── Show cart conflict warning modal ────────────────────────────────────
+  function showConflictModal(message, onClear, onKeep) {
+    var modalId = '_reg-conflict-modal';
+    var existing = document.getElementById(modalId);
+    if (existing) existing.parentNode.removeChild(existing);
+
+    var overlay = document.createElement('div');
+    overlay.id = modalId;
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = '<div style="background:#fff;border-radius:8px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.18);">'
+      + '<div style="font-size:18px;font-weight:700;margin-bottom:12px;">&#9888; Cart Conflict</div>'
+      + '<div style="font-size:14px;color:#444;margin-bottom:20px;">' + esc(message) + ' Would you like to clear your cart and add this item, or keep your current cart?</div>'
+      + '<div style="display:flex;gap:10px;justify-content:flex-end;">'
+      + '<button id="_reg-conflict-keep" style="padding:8px 16px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:14px;">Keep Current Items</button>'
+      + '<button id="_reg-conflict-clear" style="padding:8px 16px;border:none;border-radius:4px;background:#e53e3e;color:#fff;cursor:pointer;font-size:14px;">Clear Cart &amp; Add</button>'
+      + '</div></div>';
+    document.body.appendChild(overlay);
+
+    document.getElementById('_reg-conflict-keep').addEventListener('click', function() {
+      overlay.parentNode.removeChild(overlay);
+      onKeep();
+    });
+    document.getElementById('_reg-conflict-clear').addEventListener('click', function() {
+      overlay.parentNode.removeChild(overlay);
+      onClear();
+    });
+  }
+
   // ── Registry portal inline in Ecwid account section ───────────────────────
   // When a logged-in customer visits their Ecwid account section, silently
   // authenticate them with our server and embed the registry portal as an
@@ -2445,62 +2523,79 @@ app.get("/widget/registry.js", (req, res) => {
           const originalText = btn.textContent;
           btn.disabled = true;
           btn.textContent = 'Adding...';
-          ensureCartApi(effectiveStoreId)
-            .then(function(){
-              let settled = false;
-              function finish(ok, message){
-                if (settled) return;
-                settled = true;
-                // Remove cart-change listener
-                try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.remove(_onCartChanged); } catch(e){}
-                if (ok) {
-                  trackRegItem(productId, registry);
-                  setStatus(message || 'Added to cart.', false);
-                } else {
-                  setStatus(message || 'Failed to add to cart.', true);
+
+          function doAddToCart() {
+            ensureCartApi(effectiveStoreId)
+              .then(function(){
+                let settled = false;
+                function finish(ok, message){
+                  if (settled) return;
+                  settled = true;
+                  // Remove cart-change listener
+                  try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.remove(_onCartChanged); } catch(e){}
+                  if (ok) {
+                    trackRegItem(productId, registry);
+                    setStatus(message || 'Added to cart.', false);
+                  } else {
+                    setStatus(message || 'Failed to add to cart.', true);
+                  }
+                  btn.disabled = false;
+                  btn.textContent = originalText;
                 }
+
+                // Listen for Ecwid cart change as backup detection
+                function _onCartChanged(cart) {
+                  if (settled) return;
+                  var items = (cart && (cart.items || cart.products)) || [];
+                  var found = Array.isArray(items) && items.some(function(it) {
+                    var id = Number(it?.productId || it?.id || it?.product?.id || 0);
+                    return id === Number(productId);
+                  });
+                  if (found) finish(true, 'Added to cart.');
+                }
+                try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.add(_onCartChanged); } catch(e){}
+
+                // Fire addProduct — callback may or may not fire on Instant Sites
+                console.log('[registry] adding product', productId);
+                try {
+                  Ecwid.Cart.addProduct(productId, 1, function(success){
+                    console.log('[registry] addProduct callback:', success);
+                    finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
+                  });
+                } catch (err) {
+                  console.log('[registry] addProduct error:', err);
+                }
+
+                // Fallback: assume success after 2s (item was likely added)
+                setTimeout(function(){
+                  if (!settled) {
+                    console.log('[registry] callback never fired, assuming success');
+                    trackRegItem(productId, registry);
+                    finish(true, 'Added to cart.');
+                  }
+                }, 2000);
+              })
+              .catch(function(err){
+                console.log('[registry] ensureCartApi failed:', err);
+                setStatus('Cart API unavailable. Try adding from the store product page.', true);
                 btn.disabled = false;
                 btn.textContent = originalText;
-              }
+              });
+          }
 
-              // Listen for Ecwid cart change as backup detection
-              function _onCartChanged(cart) {
-                if (settled) return;
-                var items = (cart && (cart.items || cart.products)) || [];
-                var found = Array.isArray(items) && items.some(function(it) {
-                  var id = Number(it?.productId || it?.id || it?.product?.id || 0);
-                  return id === Number(productId);
-                });
-                if (found) finish(true, 'Added to cart.');
-              }
-              try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.add(_onCartChanged); } catch(e){}
-
-              // Fire addProduct — callback may or may not fire on Instant Sites
-              console.log('[registry] adding product', productId);
-              try {
-                Ecwid.Cart.addProduct(productId, 1, function(success){
-                  console.log('[registry] addProduct callback:', success);
-                  finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
-                });
-              } catch (err) {
-                console.log('[registry] addProduct error:', err);
-              }
-
-              // Fallback: assume success after 2s (item was likely added)
-              setTimeout(function(){
-                if (!settled) {
-                  console.log('[registry] callback never fired, assuming success');
-                  trackRegItem(productId, registry);
-                  finish(true, 'Added to cart.');
-                }
-              }, 2000);
-            })
-            .catch(function(err){
-              console.log('[registry] ensureCartApi failed:', err);
-              setStatus('Cart API unavailable. Try adding from the store product page.', true);
+          detectCartConflict(registry.id, function(conflict) {
+            if (conflict) {
               btn.disabled = false;
               btn.textContent = originalText;
-            });
+              showConflictModal(conflict.message, function() {
+                clearCartAndProceed(function() { doAddToCart(); });
+              }, function() {
+                // Keep current items — do nothing
+              });
+            } else {
+              doAddToCart();
+            }
+          });
         });
       });
     }
