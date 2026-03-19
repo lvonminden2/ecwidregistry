@@ -34,7 +34,9 @@
         </p>
       </div>
       <img v-if="activeRegistry.photo" class="gr-banner-img" :src="activeRegistry.photo" alt="Registry photo" />
-      <p v-if="activeRegistry.description" class="gr-description">{{ activeRegistry.description }}</p>
+      <p v-if="activeRegistry.description" class="gr-description">
+        {{ activeRegistry.description }}
+      </p>
       <div v-if="statusMsg" :class="['gr-status', statusMsg.ok ? 'gr-status--ok' : 'gr-status--err']">
         {{ statusMsg.text }}
       </div>
