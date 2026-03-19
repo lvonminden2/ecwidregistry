@@ -33,6 +33,8 @@
           {{ formatDate(activeRegistry.event_date) }}
         </p>
       </div>
+      <img v-if="activeRegistry.photo" class="gr-banner-img" :src="activeRegistry.photo" alt="Registry photo" />
+      <p v-if="activeRegistry.description" class="gr-description">{{ activeRegistry.description }}</p>
       <div v-if="statusMsg" :class="['gr-status', statusMsg.ok ? 'gr-status--ok' : 'gr-status--err']">
         {{ statusMsg.text }}
       </div>
@@ -41,6 +43,7 @@
       </div>
       <div v-else class="gr-items">
         <div v-for="item in items" :key="item.id" class="gr-item">
+          <img v-if="item.product_thumbnail" class="gr-item-thumb" :src="item.product_thumbnail" alt="" />
           <div class="gr-item-info">
             <div class="gr-item-name">
               {{ item.product_name || 'Registry item' }}
@@ -162,6 +165,8 @@ interface Registry {
   display_name: string;
   event_date?: string;
   item_count?: number;
+  photo?: string;
+  description?: string;
 }
 
 interface RegistryItem {
@@ -171,6 +176,7 @@ interface RegistryItem {
   desired_qty: number;
   purchased_qty: number;
   still_needed: number;
+  product_thumbnail?: string;
 }
 
 // ── State ─────────────────────────────────────────────────────────────────
@@ -418,6 +424,27 @@ watch(serverUrl, () => {
 .gr-fulfilled {
   font-size: 0.8rem;
   color: #2a6e3f;
+  flex-shrink: 0;
+}
+
+.gr-banner-img {
+  width: 100%;
+  max-height: 300px;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+.gr-description {
+  margin: 0 0 16px;
+  color: var(--gr-muted, #666);
+  font-size: 0.95em;
+  line-height: 1.5;
+}
+.gr-item-thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 4px;
   flex-shrink: 0;
 }
 
