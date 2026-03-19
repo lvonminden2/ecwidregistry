@@ -319,8 +319,8 @@ function detectCartConflict(newRegistryId: number): Promise<{ message: string } 
     w.Ecwid.Cart.get((cart: { items?: unknown[] }) => {
       if (resolved) return;
       resolved = true;
-      const items = cart?.items ?? [];
-      for (const cartItem of items as Record<string, unknown>[]) {
+      const cartItems = cart?.items ?? [];
+      for (const cartItem of cartItems as Record<string, unknown>[]) {
         const product = (cartItem.product as Record<string, unknown>) ?? cartItem;
         const pid = String((product.id as number) ?? (cartItem.productId as number) ?? 0);
         if (pid === '0') continue;
@@ -344,8 +344,8 @@ function clearCart(): Promise<void> {
   if (!w.Ecwid?.Cart?.get) return Promise.resolve();
   return new Promise((resolve) => {
     w.Ecwid.Cart.get((cart: { items?: unknown[] }) => {
-      const items = cart?.items ?? [];
-      for (let i = (items as unknown[]).length - 1; i >= 0; i--) {
+      const cartItems = cart?.items ?? [];
+      for (let i = (cartItems as unknown[]).length - 1; i >= 0; i--) {
         w.Ecwid.Cart.removeProduct(i);
       }
       setTimeout(resolve, 400);
