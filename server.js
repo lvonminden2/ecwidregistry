@@ -159,9 +159,15 @@ const init = db.transaction(() => {
   if (!cols.includes("shipping_address")) {
     db.exec("ALTER TABLE registry ADD COLUMN shipping_address TEXT");
   }
+  if (!cols.includes("description")) {
+    db.exec("ALTER TABLE registry ADD COLUMN description TEXT");
+  }
   const itemCols = db.prepare("PRAGMA table_info(registry_item)").all().map((c) => c.name);
   if (!itemCols.includes("product_sku")) {
     db.exec("ALTER TABLE registry_item ADD COLUMN product_sku TEXT");
+  }
+  if (!itemCols.includes("product_thumbnail")) {
+    db.exec("ALTER TABLE registry_item ADD COLUMN product_thumbnail TEXT");
   }
   const purchaseCols = db.prepare("PRAGMA table_info(registry_purchase)").all().map((c) => c.name);
   if (!purchaseCols.includes("product_name")) {
@@ -624,9 +630,10 @@ app.post("/admin/registry/:id/edit", (req, res) => {
     return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
   }
   const date = String(req.body.event_date || "").trim() || null;
+  const description = String(req.body.description || "").trim() || null;
   db.prepare(
-    "UPDATE registry SET display_name = ?, event_date = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(name, date, registryId);
+    "UPDATE registry SET display_name = ?, event_date = ?, description = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(name, date, description, registryId);
   const msg = encodeURIComponent("Registry updated.");
   return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
 });
@@ -708,6 +715,7 @@ app.post("/admin/registry/:id/items", async (req, res) => {
   let productId = Number(product_id || 0);
   let name = product_name?.trim() || null;
   let sku = product_sku?.trim() || null;
+  let thumbnail = null;
 
   if (!productId && sku) {
     const bySku = await fetchEcwidProductBySku(sku, creds.storeId, creds.accessToken);
@@ -718,6 +726,7 @@ app.post("/admin/registry/:id/items", async (req, res) => {
     productId = Number(bySku.product.id);
     if (!name) name = bySku.product.name || null;
     if (!sku) sku = bySku.product.sku || null;
+    if (!thumbnail) thumbnail = bySku.product.thumbnailUrl || null;
   }
 
   if (productId && (!name || !sku)) {
@@ -725,6 +734,7 @@ app.post("/admin/registry/:id/items", async (req, res) => {
     if (product) {
       if (!name) name = product.name || null;
       if (!sku) sku = product.sku || null;
+      if (!thumbnail) thumbnail = product.thumbnailUrl || null;
     }
   }
 
@@ -743,11 +753,12 @@ app.post("/admin/registry/:id/items", async (req, res) => {
     .get(registryId, productId);
   if (existingItem) {
     db.prepare(
-      "UPDATE registry_item SET desired_qty = ?, product_name = ?, product_sku = ? WHERE id = ?"
+      "UPDATE registry_item SET desired_qty = ?, product_name = ?, product_sku = ?, product_thumbnail = ? WHERE id = ?"
     ).run(
       existingItem.desired_qty + desiredQty,
       name || existingItem.product_name,
       sku || existingItem.product_sku,
+      thumbnail || existingItem.product_thumbnail,
       existingItem.id
     );
     const msg = encodeURIComponent("Item already existed. Desired quantity was increased.");
@@ -755,8 +766,8 @@ app.post("/admin/registry/:id/items", async (req, res) => {
   }
 
   db.prepare(
-    "INSERT INTO registry_item (registry_id, product_id, product_name, product_sku, desired_qty) VALUES (?, ?, ?, ?, ?)"
-  ).run(registryId, productId, name, sku, desiredQty);
+    "INSERT INTO registry_item (registry_id, product_id, product_name, product_sku, desired_qty, product_thumbnail) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(registryId, productId, name, sku, desiredQty, thumbnail);
   res.redirect(`/admin/registry/${registryId}`);
 });
 
@@ -2357,8 +2368,12 @@ app.get("/widget/registry.js", (req, res) => {
       const rows = items.map(item => {
         const stillNeeded = Number(item.still_needed ?? Math.max(0, (item.desired_qty || 0) - (item.purchased_qty || 0)));
         const action = '<button class="reg-btn" data-product-id="' + item.product_id + '">Add to cart</button>';
+        const thumbHtml = item.product_thumbnail
+          ? '<img class="reg-item-thumb" src="' + esc(item.product_thumbnail) + '" alt="" />'
+          : '';
         return (
           '<div class="reg-item">' +
+            thumbHtml +
             '<div>' +
               '<div class="reg-item-name">' + esc(item.product_name || 'Registry item') + '</div>' +
               '<div class="reg-item-meta">Desired: ' + item.desired_qty +
@@ -2371,9 +2386,17 @@ app.get("/widget/registry.js", (req, res) => {
       }).join('');
 
       const back = isEmbed ? '<button class="reg-back-btn">Back to Registries</button>' : '';
+      const photoBanner = registry.photo
+        ? '<div class="reg-banner"><img class="reg-banner-img" src="' + esc(registry.photo) + '" alt="Registry photo" /></div>'
+        : '';
+      const descriptionHtml = registry.description
+        ? '<div class="reg-description">' + esc(registry.description) + '</div>'
+        : '';
       container.innerHTML =
         '<div class="reg-header">' + esc(registry.display_name) + '</div>' +
         '<div class="reg-sub">' + esc(fmtDate(registry.event_date)) + '</div>' +
+        photoBanner +
+        descriptionHtml +
         '<div class="reg-status"></div>' +
         back +
         '<div class="reg-items">' + rows + '</div>';

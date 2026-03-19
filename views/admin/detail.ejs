@@ -19,6 +19,10 @@
             <div class="label">Event date</div>
             <input name="event_date" type="date" value="<%= registry.event_date || '' %>" />
           </label>
+          <label class="field">
+            <div class="label">Description</div>
+            <textarea name="description" rows="3" placeholder="Add a description for the registry..."><%= registry.description || '' %></textarea>
+          </label>
           <button class="btn" type="submit">Save</button>
         </form>
       </details>
