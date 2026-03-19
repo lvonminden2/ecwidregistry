@@ -2044,6 +2044,35 @@ app.get("/widget/registry.js", (req, res) => {
     return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
+  // ── Cart PID cache (maintained via OnCartChanged) ───────────────────────
+  // Keeps _cart_pids in localStorage up to date so detectCartConflict can
+  // check for regular shopping items without calling Cart.get at click time.
+  (function subscribeCartCache() {
+    function _updateCartPids(cart) {
+      try {
+        var items = (cart && (cart.items || cart.products)) || [];
+        var pids = [];
+        for (var i = 0; i < items.length; i++) {
+          var product = (items[i] && items[i].product) || items[i];
+          var pid = String((product && product.id) || items[i].productId || 0);
+          if (pid !== '0') pids.push(pid);
+        }
+        localStorage.setItem('_cart_pids', JSON.stringify(pids));
+      } catch(e) {}
+    }
+    function _subscribe() {
+      if (window.Ecwid && Ecwid.OnCartChanged && Ecwid.OnCartChanged.add) {
+        Ecwid.OnCartChanged.add(_updateCartPids);
+        if (typeof Ecwid.Cart.get === 'function') Ecwid.Cart.get(_updateCartPids);
+        return true;
+      }
+      return false;
+    }
+    if (!_subscribe()) {
+      var _poll = setInterval(function() { if (_subscribe()) clearInterval(_poll); }, 500);
+    }
+  })();
+
   function hasCartApi(){
     return !!(window.Ecwid && Ecwid.Cart && typeof Ecwid.Cart.addProduct === 'function');
   }
@@ -2148,35 +2177,25 @@ app.get("/widget/registry.js", (req, res) => {
       return;
     }
 
-    // Step 2: Check Cart.get for regular (non-registry) items (best effort, with timeout)
-    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') {
-      callback(null); return;
-    }
-
-    var resolved = false;
-    Ecwid.Cart.get(function(cart) {
-      if (resolved) return;
-      resolved = true;
-      var items = (cart && cart.items) || [];
-      for (var i = 0; i < items.length; i++) {
-        var product = (items[i] && items[i].product) || items[i];
-        var pid = String((product && product.id) || items[i].productId || 0);
-        if (pid === '0') continue;
-        var tracked = regItems[pid];
-        if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
-          callback({ type: 'regular', message: 'Your cart contains items from regular shopping.' });
-          return;
-        }
+    // Step 2: Check _cart_pids cache for regular (non-registry) items (synchronous)
+    var cachedPids = [];
+    try { cachedPids = JSON.parse(localStorage.getItem('_cart_pids') || '[]'); } catch(e) {}
+    for (var c = 0; c < cachedPids.length; c++) {
+      var cpid = cachedPids[c];
+      if (cpid === '0') continue;
+      var ctracked = regItems[cpid];
+      if (!ctracked || (Array.isArray(ctracked) && ctracked.length === 0)) {
+        callback({ type: 'regular', message: 'Your cart contains items from regular shopping.' });
+        return;
       }
-      callback(null);
-    });
-    // Timeout: don't hang if Cart.get never calls back
-    setTimeout(function() { if (!resolved) { resolved = true; callback(null); } }, 2000);
+    }
+    callback(null);
   }
 
   // ── Clear cart and then run a callback ──────────────────────────────────
   function clearCartAndProceed(proceed) {
     localStorage.removeItem('_reg_items');
+    localStorage.removeItem('_cart_pids');
     if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') {
       proceed(); return;
     }
