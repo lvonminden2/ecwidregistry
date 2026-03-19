@@ -2817,6 +2817,17 @@ app.get("/widget/portal.js", (req, res) => {
   var _plId   = 'registry-portal-inline-wrap';
   var _frameId = 'registry-portal-iframe';
   var _initDone = false;
+
+  // ── Cart guard injection ──────────────────────────────────────────────────
+  // portal.js is loaded on every storefront page, so this ensures the guard
+  // runs globally — not just when the user visits the registry page.
+  if (!document.querySelector('script[data-registry-guard]')) {
+    var _gs = document.createElement('script');
+    _gs.setAttribute('data-registry-guard', '1');
+    _gs.src = baseUrl + '/widget/cart-guard.js';
+    document.head.appendChild(_gs);
+  }
+
   // All Ecwid page types that constitute "the account section"
   var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES',
                     'RESET_PASSWORD','SIGN_IN','ACCOUNT'];
