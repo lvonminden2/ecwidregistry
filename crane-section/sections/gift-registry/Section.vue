@@ -1,5 +1,31 @@
 <template>
   <section class="gr-section">
+    <!-- Cart conflict modal -->
+    <Teleport to="body">
+      <div
+        v-if="conflictModal"
+        class="gr-conflict-overlay"
+        @click.self="conflictModal?.onKeep(); conflictModal = null"
+      >
+        <div class="gr-conflict-modal">
+          <div class="gr-conflict-title">&#9888; Cart Conflict</div>
+          <div class="gr-conflict-msg">
+            {{ conflictModal.message }} Would you like to clear your cart and add this item, or keep your current cart?
+          </div>
+          <div class="gr-conflict-actions">
+            <button
+              class="gr-conflict-keep"
+              @click="conflictModal?.onKeep(); conflictModal = null"
+            >Keep Current Items</button>
+            <button
+              class="gr-conflict-clear"
+              @click="conflictModal?.onClear(); conflictModal = null"
+            >Clear Cart &amp; Add</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- Header -->
     <div v-if="title || subtitle" class="gr-heading">
       <h2 v-if="title" class="gr-title">
@@ -197,6 +223,7 @@ const error         = ref('');
 const search        = ref('');
 const addingId      = ref<number | null>(null);
 const statusMsg     = ref<{ ok: boolean; text: string } | null>(null);
+const conflictModal = ref<{ message: string; onClear: () => void; onKeep: () => void } | null>(null);
 let   searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -257,6 +284,55 @@ function onSearch() {
   searchTimer = setTimeout(() => loadRegistries(search.value.trim()), 350);
 }
 
+// ── Cart conflict detection ────────────────────────────────────────────────
+function detectCartConflict(newRegistryId: number): Promise<{ message: string } | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
+  if (!w.Ecwid?.Cart?.get) return Promise.resolve(null);
+  let regItems: Record<string, Array<{ rid: number; name: string; qty: number }>> = {};
+  try { regItems = JSON.parse(localStorage.getItem('_reg_items') ?? '{}'); } catch { /* ignore */ }
+  return new Promise((resolve) => {
+    w.Ecwid.Cart.get((cart: { items?: unknown[] }) => {
+      const items = cart?.items ?? [];
+      if (!items.length) { resolve(null); return; }
+      let conflict: { message: string } | null = null;
+      for (const cartItem of items as Record<string, unknown>[]) {
+        const product = (cartItem.product as Record<string, unknown>) ?? cartItem;
+        const pid = String((product.id as number) ?? (cartItem.productId as number) ?? 0);
+        if (pid === '0') continue;
+        const tracked = regItems[pid];
+        if (!tracked || tracked.length === 0) {
+          conflict = { message: 'Your cart contains items from regular shopping.' };
+          break;
+        }
+        const rids = tracked.map((e) => e.rid);
+        if (!rids.includes(newRegistryId)) {
+          const regName = tracked[0]?.name ?? 'another registry';
+          conflict = { message: `Your cart has items from "${regName}".` };
+          break;
+        }
+      }
+      resolve(conflict);
+    });
+  });
+}
+
+function clearCart(): Promise<void> {
+  localStorage.removeItem('_reg_items');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
+  if (!w.Ecwid?.Cart?.get) return Promise.resolve();
+  return new Promise((resolve) => {
+    w.Ecwid.Cart.get((cart: { items?: unknown[] }) => {
+      const items = cart?.items ?? [];
+      for (let i = (items as unknown[]).length - 1; i >= 0; i--) {
+        w.Ecwid.Cart.removeProduct(i);
+      }
+      setTimeout(resolve, 400);
+    });
+  });
+}
+
 // ── Cart integration ──────────────────────────────────────────────────────
 function trackItem(productId: number, registry: Registry) {
   try {
@@ -275,19 +351,15 @@ function trackItem(productId: number, registry: Registry) {
   } catch { /* localStorage may be unavailable */ }
 }
 
-async function addToCart(item: RegistryItem) {
+async function doAddToCart(item: RegistryItem) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as Record<string, any>;
-  if (!w.Ecwid?.Cart?.addProduct) {
-    statusMsg.value = { ok: false, text: 'Cart not available — try from the product page.' };
-    return;
-  }
   addingId.value  = item.product_id;
   statusMsg.value = null;
   await new Promise<void>((resolve) => {
     w.Ecwid.Cart.addProduct(item.product_id, 1, (success: boolean) => {
       if (success !== false) {
-        trackItem(item.product_id, activeRegistry.value);
+        trackItem(item.product_id, activeRegistry.value!);
         statusMsg.value = { ok: true, text: 'Added to cart!' };
       } else {
         statusMsg.value = { ok: false, text: 'Could not add item. Please try again.' };
@@ -297,13 +369,37 @@ async function addToCart(item: RegistryItem) {
     // Fallback: assume success after 2 s if no callback fires
     setTimeout(() => {
       if (addingId.value === item.product_id) {
-        trackItem(item.product_id, activeRegistry.value);
+        trackItem(item.product_id, activeRegistry.value!);
         statusMsg.value = { ok: true, text: 'Added to cart!' };
         resolve();
       }
     }, 2000);
   });
   addingId.value = null;
+}
+
+async function addToCart(item: RegistryItem) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
+  if (!w.Ecwid?.Cart?.addProduct) {
+    statusMsg.value = { ok: false, text: 'Cart not available — try from the product page.' };
+    return;
+  }
+  const conflict = await detectCartConflict(activeRegistry.value!.id);
+  if (conflict) {
+    conflictModal.value = {
+      message: conflict.message,
+      onClear: async () => {
+        await clearCart();
+        doAddToCart(item);
+      },
+      onKeep: () => {
+        // Keep current cart — do nothing
+      },
+    };
+    return;
+  }
+  await doAddToCart(item);
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -477,4 +573,62 @@ watch(serverUrl, () => {
   .gr-list--3col,
   .gr-list--4col { grid-template-columns: 1fr; }
 }
+
+/* Cart conflict modal */
+.gr-conflict-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gr-conflict-modal {
+  background: #fff;
+  border-radius: 8px;
+  padding: 28px 32px;
+  max-width: 420px;
+  width: 90%;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+  color: #333;
+  font-family: inherit;
+}
+.gr-conflict-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.gr-conflict-msg {
+  font-size: 14px;
+  color: #444;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+.gr-conflict-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.gr-conflict-keep {
+  padding: 8px 16px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+}
+.gr-conflict-clear {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  background: #e53e3e;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+}
+.gr-conflict-keep:hover { background: #f5f5f5; }
+.gr-conflict-clear:hover { background: #c53030; }
 </style>
