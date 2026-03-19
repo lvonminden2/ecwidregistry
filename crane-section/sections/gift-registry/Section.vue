@@ -315,36 +315,22 @@ function detectCartConflict(newRegistryId: number): Promise<{ message: string } 
     return Promise.resolve({ message: `Your cart has items from "${existingRegName}".` });
   }
 
-  // Step 2: Check Cart.get for regular (non-registry) items (best effort, with timeout)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = window as Record<string, any>;
-  if (!w.Ecwid?.Cart?.get) return Promise.resolve(null);
-
-  return new Promise((resolve) => {
-    let resolved = false;
-    w.Ecwid.Cart.get((cart: { items?: unknown[] }) => {
-      if (resolved) return;
-      resolved = true;
-      const cartItems = cart?.items ?? [];
-      for (const cartItem of cartItems as Record<string, unknown>[]) {
-        const product = (cartItem.product as Record<string, unknown>) ?? cartItem;
-        const pid = String((product.id as number) ?? (cartItem.productId as number) ?? 0);
-        if (pid === '0') continue;
-        const tracked = regItems[pid];
-        if (!tracked || tracked.length === 0) {
-          resolve({ message: 'Your cart contains items from regular shopping.' });
-          return;
-        }
-      }
-      resolve(null);
-    });
-    // Timeout: don't hang if Cart.get never calls back
-    setTimeout(() => { if (!resolved) { resolved = true; resolve(null); } }, 2000);
-  });
+  // Step 2: Check _cart_pids cache for regular (non-registry) items (synchronous)
+  let cachedPids: string[] = [];
+  try { cachedPids = JSON.parse(localStorage.getItem('_cart_pids') ?? '[]'); } catch { /* ignore */ }
+  for (const pid of cachedPids) {
+    if (pid === '0') continue;
+    const tracked = regItems[pid];
+    if (!tracked || tracked.length === 0) {
+      return Promise.resolve({ message: 'Your cart contains items from regular shopping.' });
+    }
+  }
+  return Promise.resolve(null);
 }
 
 function clearCart(): Promise<void> {
   localStorage.removeItem('_reg_items');
+  localStorage.removeItem('_cart_pids');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as Record<string, any>;
   if (!w.Ecwid?.Cart?.get) return Promise.resolve();
@@ -428,8 +414,32 @@ async function addToCart(item: RegistryItem) {
   await doAddToCart(item);
 }
 
+// ── Cart PID cache (maintained via OnCartChanged) ─────────────────────────
+function cacheCartPids(cart: { items?: unknown[]; products?: unknown[] }) {
+  try {
+    const raw = (cart?.items ?? (cart as Record<string, unknown>)?.products ?? []) as Array<Record<string, unknown>>;
+    const pids = raw
+      .map((item) => {
+        const product = (item.product as Record<string, unknown>) ?? item;
+        return String((product.id as number) ?? (item.productId as number) ?? 0);
+      })
+      .filter((pid) => pid !== '0');
+    localStorage.setItem('_cart_pids', JSON.stringify(pids));
+  } catch { /* ignore */ }
+}
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────
-onMounted(() => loadRegistries());
+onMounted(() => {
+  loadRegistries();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
+  if (w.Ecwid?.OnCartChanged?.add) {
+    w.Ecwid.OnCartChanged.add(cacheCartPids);
+  }
+  if (w.Ecwid?.Cart?.get) {
+    w.Ecwid.Cart.get(cacheCartPids);
+  }
+});
 
 // Re-fetch when serverUrl changes in the editor
 watch(serverUrl, () => {
