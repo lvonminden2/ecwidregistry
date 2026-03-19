@@ -2524,9 +2524,24 @@ app.get("/widget/registry.js", (req, res) => {
           btn.disabled = true;
           btn.textContent = 'Adding...';
 
-          function doAddToCart() {
-            ensureCartApi(effectiveStoreId)
-              .then(function(){
+          // Load Ecwid cart API first, THEN check for conflicts so Cart.get works reliably
+          ensureCartApi(effectiveStoreId)
+            .then(function(){
+              detectCartConflict(registry.id, function(conflict) {
+                if (conflict) {
+                  btn.disabled = false;
+                  btn.textContent = originalText;
+                  showConflictModal(conflict.message, function() {
+                    clearCartAndProceed(function() { performAdd(); });
+                  }, function() {
+                    // Keep current items — do nothing
+                  });
+                } else {
+                  performAdd();
+                }
+              });
+
+              function performAdd() {
                 let settled = false;
                 function finish(ok, message){
                   if (settled) return;
@@ -2574,28 +2589,14 @@ app.get("/widget/registry.js", (req, res) => {
                     finish(true, 'Added to cart.');
                   }
                 }, 2000);
-              })
-              .catch(function(err){
-                console.log('[registry] ensureCartApi failed:', err);
-                setStatus('Cart API unavailable. Try adding from the store product page.', true);
-                btn.disabled = false;
-                btn.textContent = originalText;
-              });
-          }
-
-          detectCartConflict(registry.id, function(conflict) {
-            if (conflict) {
+              }
+            })
+            .catch(function(err){
+              console.log('[registry] ensureCartApi failed:', err);
+              setStatus('Cart API unavailable. Try adding from the store product page.', true);
               btn.disabled = false;
               btn.textContent = originalText;
-              showConflictModal(conflict.message, function() {
-                clearCartAndProceed(function() { doAddToCart(); });
-              }, function() {
-                // Keep current items — do nothing
-              });
-            } else {
-              doAddToCart();
-            }
-          });
+            });
         });
       });
     }
