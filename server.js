@@ -1231,11 +1231,26 @@ app.get("/api/registries", (req, res) => {
   res.json(rows);
 });
 
-app.get("/api/registries/:id", (req, res) => {
+app.get("/api/registries/:id", async (req, res) => {
   const registryId = Number(req.params.id);
   const registry = getRegistryById(registryId);
   if (!registry || registry.status !== "active") return res.status(404).json({ error: "Not found" });
   const items = getRegistryItems(registryId);
+
+  // Backfill thumbnails for items added before the product_thumbnail column existed
+  const missingThumb = items.filter(item => !item.product_thumbnail && item.product_id);
+  if (missingThumb.length > 0) {
+    const creds = resolveStoreCredentials(registry.store_id);
+    await Promise.all(missingThumb.map(async (item) => {
+      const product = await fetchEcwidProduct(item.product_id, creds.storeId, creds.accessToken);
+      if (product?.thumbnailUrl) {
+        db.prepare("UPDATE registry_item SET product_thumbnail = ? WHERE id = ?")
+          .run(product.thumbnailUrl, item.id);
+        item.product_thumbnail = product.thumbnailUrl;
+      }
+    }));
+  }
+
   // registry_type is already on the registry row from getRegistryById
   res.json({ registry, items });
 });
