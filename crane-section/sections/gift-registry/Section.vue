@@ -12,20 +12,20 @@
             &#9888; Cart Conflict
           </div>
           <div class="gr-conflict-msg">
-            {{ conflictModal.message }} Would you like to clear your cart and add this item, or keep your current cart?
+            {{ conflictModal.message }}
           </div>
           <div class="gr-conflict-actions">
             <button
               class="gr-conflict-keep"
               @click="conflictModal?.onKeep(); conflictModal = null"
             >
-              Keep Current Items
+              {{ conflictModal.keepLabel ?? 'Keep Current Items' }}
             </button>
             <button
               class="gr-conflict-clear"
               @click="conflictModal?.onClear(); conflictModal = null"
             >
-              Clear Cart &amp; Add
+              {{ conflictModal.clearLabel ?? 'Clear Cart &amp; Add' }}
             </button>
           </div>
         </div>
@@ -229,7 +229,7 @@ const error         = ref('');
 const search        = ref('');
 const addingId      = ref<number | null>(null);
 const statusMsg     = ref<{ ok: boolean; text: string } | null>(null);
-const conflictModal = ref<{ message: string; onClear: () => void; onKeep: () => void } | null>(null);
+const conflictModal = ref<{ message: string; clearLabel?: string; keepLabel?: string; onClear: () => void; onKeep: () => void } | null>(null);
 let   searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -363,17 +363,32 @@ function trackItem(productId: number, registry: Registry) {
   } catch { /* localStorage may be unavailable */ }
 }
 
+function untrackItem(productId: number, registryId: number) {
+  try {
+    const stored = JSON.parse(localStorage.getItem('_reg_items') ?? '{}');
+    const pid = String(productId);
+    const entries: Array<{ rid: number; name: string; qty: number }> =
+      Array.isArray(stored[pid]) ? stored[pid] : [];
+    const filtered = entries.filter((e) => e.rid !== registryId);
+    if (filtered.length === 0) { delete stored[pid]; } else { stored[pid] = filtered; }
+    localStorage.setItem('_reg_items', JSON.stringify(stored));
+  } catch { /* ignore */ }
+}
+
 async function doAddToCart(item: RegistryItem) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as Record<string, any>;
   addingId.value  = item.product_id;
   statusMsg.value = null;
+  // Track optimistically so the OnCartChanged guard doesn't misidentify this
+  // as a regular item while the addProduct callback is still in flight.
+  trackItem(item.product_id, activeRegistry.value!);
   await new Promise<void>((resolve) => {
     w.Ecwid.Cart.addProduct(item.product_id, 1, (success: boolean) => {
       if (success !== false) {
-        trackItem(item.product_id, activeRegistry.value!);
         statusMsg.value = { ok: true, text: 'Added to cart!' };
       } else {
+        untrackItem(item.product_id, activeRegistry.value!.id);
         statusMsg.value = { ok: false, text: 'Could not add item. Please try again.' };
       }
       resolve();
@@ -381,7 +396,6 @@ async function doAddToCart(item: RegistryItem) {
     // Fallback: assume success after 2 s if no callback fires
     setTimeout(() => {
       if (addingId.value === item.product_id) {
-        trackItem(item.product_id, activeRegistry.value!);
         statusMsg.value = { ok: true, text: 'Added to cart!' };
         resolve();
       }
@@ -414,10 +428,41 @@ async function addToCart(item: RegistryItem) {
   await doAddToCart(item);
 }
 
-// ── Cart PID cache (maintained via OnCartChanged) ─────────────────────────
-function cacheCartPids(cart: { items?: unknown[]; products?: unknown[] }) {
+// ── Cart change handler: guards against mixing + keeps _cart_pids fresh ────
+function onCartChanged(cart: { items?: unknown[]; products?: unknown[] }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
+  const raw = (cart?.items ?? (cart as Record<string, unknown>)?.products ?? []) as Array<Record<string, unknown>>;
+
+  // Guard: if registry items are in the cart, reject any non-registry item
+  // that was just added (e.g. via the native Ecwid store UI).
+  let regItems: Record<string, Array<{ rid: number; name: string; qty: number }>> = {};
+  try { regItems = JSON.parse(localStorage.getItem('_reg_items') ?? '{}'); } catch { /* ignore */ }
+
+  if (Object.keys(regItems).length > 0) {
+    for (let j = raw.length - 1; j >= 0; j--) {
+      const product = (raw[j].product as Record<string, unknown>) ?? raw[j];
+      const pid = String((product.id as number) ?? (raw[j].productId as number) ?? 0);
+      if (pid === '0') continue;
+      const tracked = regItems[pid];
+      if (!tracked || tracked.length === 0) {
+        // Non-registry item detected — remove it and warn
+        if (w.Ecwid?.Cart?.removeProduct) w.Ecwid.Cart.removeProduct(j);
+        if (!conflictModal.value) {
+          conflictModal.value = {
+            message: 'A regular item could not be added — your cart already contains registry items.',
+            clearLabel: 'Clear Registry Cart',
+            keepLabel: 'Keep Registry Items',
+            onClear: async () => { await clearCart(); },
+            onKeep: () => { /* item already removed, keep registry items */ },
+          };
+        }
+      }
+    }
+  }
+
+  // Update _cart_pids cache for detectCartConflict
   try {
-    const raw = (cart?.items ?? (cart as Record<string, unknown>)?.products ?? []) as Array<Record<string, unknown>>;
     const pids = raw
       .map((item) => {
         const product = (item.product as Record<string, unknown>) ?? item;
@@ -434,10 +479,10 @@ onMounted(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as Record<string, any>;
   if (w.Ecwid?.OnCartChanged?.add) {
-    w.Ecwid.OnCartChanged.add(cacheCartPids);
+    w.Ecwid.OnCartChanged.add(onCartChanged);
   }
   if (w.Ecwid?.Cart?.get) {
-    w.Ecwid.Cart.get(cacheCartPids);
+    w.Ecwid.Cart.get(onCartChanged);
   }
 });
 

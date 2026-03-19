@@ -2048,9 +2048,42 @@ app.get("/widget/registry.js", (req, res) => {
   // Keeps _cart_pids in localStorage up to date so detectCartConflict can
   // check for regular shopping items without calling Cart.get at click time.
   (function subscribeCartCache() {
-    function _updateCartPids(cart) {
+    // Combined handler: guards against mixing regular + registry items, and
+    // keeps _cart_pids fresh for detectCartConflict.
+    // showConflictModal is a function declaration in the enclosing scope and
+    // is therefore hoisted — safe to reference here even though it appears
+    // later in the source.
+    function _onCartChanged(cart) {
+      var items = (cart && (cart.items || cart.products)) || [];
+
+      // Guard: if registry items are in the cart, eject any non-registry item
+      var regItems = {};
+      try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+      if (Object.keys(regItems).length > 0) {
+        var hadConflict = false;
+        for (var j = items.length - 1; j >= 0; j--) {
+          var gproduct = (items[j] && items[j].product) || items[j];
+          var gpid = String((gproduct && gproduct.id) || items[j].productId || 0);
+          if (gpid === '0') continue;
+          var gtracked = regItems[gpid];
+          if (!gtracked || (Array.isArray(gtracked) && gtracked.length === 0)) {
+            if (window.Ecwid && Ecwid.Cart && typeof Ecwid.Cart.removeProduct === 'function') {
+              Ecwid.Cart.removeProduct(j);
+            }
+            hadConflict = true;
+          }
+        }
+        if (hadConflict && !document.getElementById('reg-conflict-modal')) {
+          showConflictModal(
+            'A regular item could not be added — your cart already contains registry items.',
+            function() { clearCartAndProceed(function(){}); },
+            null
+          );
+        }
+      }
+
+      // Update _cart_pids cache
       try {
-        var items = (cart && (cart.items || cart.products)) || [];
         var pids = [];
         for (var i = 0; i < items.length; i++) {
           var product = (items[i] && items[i].product) || items[i];
@@ -2062,8 +2095,8 @@ app.get("/widget/registry.js", (req, res) => {
     }
     function _subscribe() {
       if (window.Ecwid && Ecwid.OnCartChanged && Ecwid.OnCartChanged.add) {
-        Ecwid.OnCartChanged.add(_updateCartPids);
-        if (typeof Ecwid.Cart.get === 'function') Ecwid.Cart.get(_updateCartPids);
+        Ecwid.OnCartChanged.add(_onCartChanged);
+        if (typeof Ecwid.Cart.get === 'function') Ecwid.Cart.get(_onCartChanged);
         return true;
       }
       return false;
@@ -2142,6 +2175,17 @@ app.get("/widget/registry.js", (req, res) => {
         entries.push({ rid: registry.id, name: registry.display_name, qty: 1 });
       }
       regItems[pid] = entries;
+      localStorage.setItem('_reg_items', JSON.stringify(regItems));
+    } catch(e) {}
+  }
+
+  function untrackRegItem(productId, registryId) {
+    try {
+      var regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}');
+      var pid = String(productId);
+      var entries = Array.isArray(regItems[pid]) ? regItems[pid] : [];
+      var filtered = entries.filter(function(e) { return e.rid !== registryId; });
+      if (filtered.length === 0) { delete regItems[pid]; } else { regItems[pid] = filtered; }
       localStorage.setItem('_reg_items', JSON.stringify(regItems));
     } catch(e) {}
   }
@@ -2585,15 +2629,20 @@ app.get("/widget/registry.js", (req, res) => {
 
               function performAdd() {
                 let settled = false;
+                // Track optimistically so the global OnCartChanged guard does not
+                // misidentify this registry item as a regular item while the
+                // addProduct callback is still in flight.
+                trackRegItem(productId, registry);
+
                 function finish(ok, message){
                   if (settled) return;
                   settled = true;
                   // Remove cart-change listener
                   try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.remove(_onCartChanged); } catch(e){}
                   if (ok) {
-                    trackRegItem(productId, registry);
                     setStatus(message || 'Added to cart.', false);
                   } else {
+                    untrackRegItem(productId, registry.id);
                     setStatus(message || 'Failed to add to cart.', true);
                   }
                   btn.disabled = false;
@@ -2621,13 +2670,13 @@ app.get("/widget/registry.js", (req, res) => {
                   });
                 } catch (err) {
                   console.log('[registry] addProduct error:', err);
+                  untrackRegItem(productId, registry.id);
                 }
 
                 // Fallback: assume success after 2s (item was likely added)
                 setTimeout(function(){
                   if (!settled) {
                     console.log('[registry] callback never fired, assuming success');
-                    trackRegItem(productId, registry);
                     finish(true, 'Added to cart.');
                   }
                 }, 2000);
