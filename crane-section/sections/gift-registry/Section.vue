@@ -408,9 +408,8 @@ watch(serverUrl, () => {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   cursor: pointer;
-  background: currentColor;
-  color: inherit;
-  filter: invert(1);
+  background: #333;
+  color: #fff;
   transition: opacity 0.15s;
 }
 .gr-btn:hover    { opacity: 0.85; }
