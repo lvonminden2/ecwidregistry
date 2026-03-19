@@ -2120,35 +2120,58 @@ app.get("/widget/registry.js", (req, res) => {
   // ── Cart conflict detection ──────────────────────────────────────────────
   // Detects if adding a registry item would mix it with items from a different
   // registry or with regular (non-registry) shopping items.
+  // Step 1 checks _reg_items in localStorage (synchronous, always works).
+  // Step 2 checks Cart.get for regular shopping items (async, best-effort).
   function detectCartConflict(newRegistryId, callback) {
+    // Step 1: Check _reg_items for different-registry conflict (no Cart.get needed)
+    var regItems = {};
+    try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+
+    var existingRegName = '';
+    var hasDifferentRegistry = false;
+    var pids = Object.keys(regItems);
+    for (var p = 0; p < pids.length; p++) {
+      var entries = regItems[pids[p]];
+      if (!Array.isArray(entries)) continue;
+      for (var k = 0; k < entries.length; k++) {
+        if (entries[k].rid !== newRegistryId) {
+          hasDifferentRegistry = true;
+          existingRegName = entries[k].name || 'another registry';
+          break;
+        }
+      }
+      if (hasDifferentRegistry) break;
+    }
+
+    if (hasDifferentRegistry) {
+      callback({ type: 'registry', message: 'Your cart has items from "' + existingRegName + '".' });
+      return;
+    }
+
+    // Step 2: Check Cart.get for regular (non-registry) items (best effort, with timeout)
     if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') {
       callback(null); return;
     }
-    var regItems = {};
-    try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+
+    var resolved = false;
     Ecwid.Cart.get(function(cart) {
+      if (resolved) return;
+      resolved = true;
       var items = (cart && cart.items) || [];
-      if (!items.length) { callback(null); return; }
-      var conflict = null;
       for (var i = 0; i < items.length; i++) {
         var product = (items[i] && items[i].product) || items[i];
         var pid = String((product && product.id) || items[i].productId || 0);
         if (pid === '0') continue;
         var tracked = regItems[pid];
-        if (!tracked || (Array.isArray(tracked) ? tracked.length === 0 : false)) {
-          conflict = { type: 'regular', message: 'Your cart contains items from regular shopping.' };
-          break;
-        }
-        var entries = Array.isArray(tracked) ? tracked : [tracked];
-        var rids = entries.map(function(e) { return e.rid; });
-        if (rids.indexOf(newRegistryId) === -1) {
-          var regName = (entries[0] && entries[0].name) || 'another registry';
-          conflict = { type: 'registry', message: 'Your cart has items from "' + regName + '".' };
-          break;
+        if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+          callback({ type: 'regular', message: 'Your cart contains items from regular shopping.' });
+          return;
         }
       }
-      callback(conflict);
+      callback(null);
     });
+    // Timeout: don't hang if Cart.get never calls back
+    setTimeout(function() { if (!resolved) { resolved = true; callback(null); } }, 2000);
   }
 
   // ── Clear cart and then run a callback ──────────────────────────────────
