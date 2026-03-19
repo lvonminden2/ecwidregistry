@@ -439,6 +439,50 @@ textarea { resize: vertical; }
   white-space: nowrap;
 }
 
+/* Registry info card: square photo left + description right */
+.reg-info-card {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  border: 1px solid var(--reg-border);
+  border-radius: var(--reg-radius);
+  padding: 16px;
+  margin-bottom: 20px;
+  background: var(--reg-white);
+}
+
+.reg-info-photo {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: var(--reg-radius);
+  flex-shrink: 0;
+}
+
+.reg-info-desc {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--reg-muted);
+}
+
+/* Product item thumbnail */
+.reg-item-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--reg-radius);
+  flex-shrink: 0;
+}
+
+.reg-item { gap: 12px; }
+
+@media (max-width: 520px) {
+  .reg-info-card { flex-direction: column; }
+  .reg-info-photo { width: 100%; height: 180px; }
+}
+
 /* ── Setup page ──────────────────────────── */
 .setup-steps {
   display: flex;
