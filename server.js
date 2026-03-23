@@ -17,7 +17,6 @@ const PORT = process.env.PORT || 3000;
 const ECWID_CLIENT_ID = process.env.ECWID_CLIENT_ID || "";
 const ECWID_CLIENT_SECRET = process.env.ECWID_CLIENT_SECRET || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev_session_secret";
-const ALLOW_NO_ECWID = (process.env.ALLOW_NO_ECWID || "true").toLowerCase() === "true";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 // Legacy single-store env vars — used as fallbacks when no per-store record exists
 const LEGACY_ECWID_STORE_ID = process.env.ECWID_STORE_ID || "";
@@ -488,6 +487,12 @@ function requireRegistrant(req, res, next) {
   next();
 }
 
+// ── Ecwid iframe auth middleware ───────────────────────────────────────────────
+function requireEcwid(req, res, next) {
+  if (!req.ecwid) return res.status(401).send("This app must be opened from the Ecwid admin panel.");
+  next();
+}
+
 // Short-lived signed token for cross-origin iframe bootstrap (avoids third-party cookie issues)
 function createPortalToken(accountId) {
   const ts = Date.now();
@@ -557,11 +562,10 @@ app.get("/ecwid/iframe", (req, res) => {
   return res.render("admin/index", { registries, actionError: null, actionInfo: null });
 });
 
-// Admin routes
+// Admin routes — all require a valid Ecwid iframe session
+app.use("/admin", requireEcwid);
+
 app.get("/admin", (req, res) => {
-  if (!req.ecwid && !ALLOW_NO_ECWID) {
-    return res.status(401).send("Not authorized");
-  }
   let registries = [];
   if (req.ecwid?.store_id) {
     registries = db
@@ -584,7 +588,7 @@ app.get("/admin/registry/new", (req, res) => {
 
 app.post("/admin/registry", (req, res) => {
   const { display_name, event_date } = req.body;
-  const storeId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || null;
+  const storeId = req.ecwid.store_id;
   const type = "online";
   const stmt = db.prepare(
     "INSERT INTO registry (display_name, event_date, registry_type, store_id) VALUES (?, ?, ?, ?)"
@@ -616,7 +620,7 @@ app.get("/admin/registry/:id", async (req, res) => {
   const portalLoginUrl = `${BASE_URL}/portal/login`;
   const portalWidgetUrl = `${BASE_URL}/widget/portal.js`;
   const cartWidgetUrl = `${BASE_URL}/widget/cart.js`;
-  const ecwidStoreId = req.ecwid?.store_id || registry.store_id || LEGACY_ECWID_STORE_ID || '';
+  const ecwidStoreId = req.ecwid.store_id || registry.store_id;
   res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId });
 });
 
@@ -653,11 +657,7 @@ app.post("/admin/registry/:id/shipping", (req, res) => {
 
 // ── Settings page ─────────────────────────────────────────────────────────────
 app.get("/admin/settings", (req, res) => {
-  if (!req.ecwid && !ALLOW_NO_ECWID) {
-    return res.status(401).send("Not authorized");
-  }
-
-  const storeId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || '';
+  const storeId = req.ecwid.store_id;
   const creds = resolveStoreCredentials(storeId);
   const settings = {
     shippingFlatRate: storeId ? Number(getStoreSetting(storeId, 'shipping_flat_rate') || getShippingFlatRate()) : getShippingFlatRate(),
@@ -684,10 +684,6 @@ app.get("/admin/settings", (req, res) => {
 });
 
 app.post("/admin/settings", (req, res) => {
-  if (!req.ecwid && !ALLOW_NO_ECWID) {
-    return res.status(401).send("Not authorized");
-  }
-
   const { shipping_flat_rate, shipping_free_threshold, public_registry_url, registry_page_url } = req.body;
 
   const flatRate = Number(shipping_flat_rate);
@@ -699,7 +695,7 @@ app.post("/admin/settings", (req, res) => {
     return res.redirect("/admin/settings?error=" + encodeURIComponent("Free threshold must be a non-negative number."));
   }
 
-  const saveStoreId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || '';
+  const saveStoreId = req.ecwid.store_id;
   setStoreSetting(saveStoreId, 'shipping_flat_rate', String(flatRate));
   setStoreSetting(saveStoreId, 'shipping_free_threshold', String(freeThreshold));
   setStoreSetting(saveStoreId, 'public_registry_url', String(public_registry_url || '').trim());
@@ -1658,7 +1654,7 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (r
 // ─── Manual sync: fetch recent orders from Ecwid and process any that contain
 // registry items. Use this to backfill orders placed before the webhook was fixed.
 app.post("/admin/sync-orders", async (req, res) => {
-  const syncStoreId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || "";
+  const syncStoreId = req.ecwid.store_id;
   const syncCreds = resolveStoreCredentials(syncStoreId);
   if (!syncCreds.accessToken || !syncCreds.storeId) {
     return res.redirect("/admin?error=" + encodeURIComponent("Ecwid API credentials not configured."));
