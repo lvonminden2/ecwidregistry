@@ -29,7 +29,9 @@
       "WebFetch(domain:github.com)",
       "Bash(git add server.js views/partials/header.ejs .env.example)",
       "Bash(git add public/styles.css server.js)",
-      "Bash(git add -A)"
+      "Bash(git add -A)",
+      "Bash(git push origin claude/staging)",
+      "Bash(git push -u origin claude/staging)"
     ]
   }
 }
