@@ -490,16 +490,9 @@ function requireRegistrant(req, res, next) {
 
 // ── Ecwid iframe auth middleware ───────────────────────────────────────────────
 function requireEcwid(req, res, next) {
-  if (ALLOW_NO_ECWID) {
-    if (!req.ecwid) {
-      req.ecwid = { store_id: LEGACY_ECWID_STORE_ID, access_token: LEGACY_ECWID_ACCESS_TOKEN, public_token: "", lang: "" };
-      res.locals.ecwid = req.ecwid;
-    }
-    return next();
-  }
   if (req.ecwid) return next();
 
-  // Allow bootstrapping directly from the Ecwid payload query param.
+  // Always try to bootstrap from the Ecwid payload query param when present.
   // This handles the case where the iframeUrl is configured as /admin
   // instead of /ecwid/iframe, or when the session cookie is lost.
   if (req.query.payload && ECWID_CLIENT_SECRET) {
@@ -517,6 +510,12 @@ function requireEcwid(req, res, next) {
       }
       return next();
     }
+  }
+
+  if (ALLOW_NO_ECWID) {
+    req.ecwid = { store_id: LEGACY_ECWID_STORE_ID, access_token: LEGACY_ECWID_ACCESS_TOKEN, public_token: "", lang: "" };
+    res.locals.ecwid = req.ecwid;
+    return next();
   }
 
   return res.status(401).send("This app must be opened from the Ecwid admin panel.");
