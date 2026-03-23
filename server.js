@@ -29,6 +29,7 @@ const REGISTRY_PAGE_URL = process.env.REGISTRY_PAGE_URL || '';
 // Shipping rates for custom shipping handler
 const SHIPPING_FLAT_RATE = Number(process.env.SHIPPING_FLAT_RATE || 5.99);
 const SHIPPING_FREE_THRESHOLD = Number(process.env.SHIPPING_FREE_THRESHOLD || 0);
+const ALLOW_NO_ECWID = process.env.ALLOW_NO_ECWID === "true";
 
 const app = express();
 app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
@@ -489,6 +490,7 @@ function requireRegistrant(req, res, next) {
 
 // ── Ecwid iframe auth middleware ───────────────────────────────────────────────
 function requireEcwid(req, res, next) {
+  if (ALLOW_NO_ECWID) return next();
   if (req.ecwid) return next();
 
   // Allow bootstrapping directly from the Ecwid payload query param.
