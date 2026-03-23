@@ -491,7 +491,7 @@ function requireRegistrant(req, res, next) {
 // ── Ecwid iframe auth middleware ───────────────────────────────────────────────
 function requireEcwid(req, res, next) {
   if (ALLOW_NO_ECWID) {
-    if (!req.ecwid && (LEGACY_ECWID_STORE_ID || LEGACY_ECWID_ACCESS_TOKEN)) {
+    if (!req.ecwid) {
       req.ecwid = { store_id: LEGACY_ECWID_STORE_ID, access_token: LEGACY_ECWID_ACCESS_TOKEN, public_token: "", lang: "" };
       res.locals.ecwid = req.ecwid;
     }
