@@ -489,8 +489,29 @@ function requireRegistrant(req, res, next) {
 
 // ── Ecwid iframe auth middleware ───────────────────────────────────────────────
 function requireEcwid(req, res, next) {
-  if (!req.ecwid) return res.status(401).send("This app must be opened from the Ecwid admin panel.");
-  next();
+  if (req.ecwid) return next();
+
+  // Allow bootstrapping directly from the Ecwid payload query param.
+  // This handles the case where the iframeUrl is configured as /admin
+  // instead of /ecwid/iframe, or when the session cookie is lost.
+  if (req.query.payload && ECWID_CLIENT_SECRET) {
+    const data = decryptEcwidPayload(req.query.payload);
+    if (data) {
+      const storeId = String(data.store_id || data.storeId || "");
+      const accessToken = data.access_token || data.accessToken || "";
+      const publicToken = data.public_token || data.publicToken || "";
+      req.session.ecwid = { store_id: storeId, access_token: accessToken, public_token: publicToken, lang: data.lang || "" };
+      req.ecwid = req.session.ecwid;
+      res.locals.ecwid = req.ecwid;
+      if (storeId && accessToken) {
+        upsertStore(storeId, accessToken, publicToken);
+        deployCraneSection(storeId);
+      }
+      return next();
+    }
+  }
+
+  return res.status(401).send("This app must be opened from the Ecwid admin panel.");
 }
 
 // Short-lived signed token for cross-origin iframe bootstrap (avoids third-party cookie issues)
@@ -551,15 +572,25 @@ app.get("/ecwid/iframe", (req, res) => {
     console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET — skipping payload verification");
   }
 
-  // Render admin directly (avoid redirect — some iframe hosts treat 302 as an error)
+  // Explicitly save the session so the cookie is guaranteed to be set in this
+  // response before the admin HTML is sent (avoids timing issues with lazy-save).
   const storeId = req.session.ecwid?.store_id;
-  let registries;
-  if (storeId) {
-    registries = db.prepare("SELECT * FROM registry WHERE store_id = ? ORDER BY created_at DESC").all(storeId);
-  } else {
-    registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
-  }
-  return res.render("admin/index", { registries, actionError: null, actionInfo: null });
+  req.session.save(() => {
+    let registries;
+    if (storeId) {
+      registries = db.prepare("SELECT * FROM registry WHERE store_id = ? ORDER BY created_at DESC").all(storeId);
+    } else {
+      registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
+    }
+    res.render("admin/index", { registries, actionError: null, actionInfo: null });
+  });
+});
+
+// Allow all /admin routes to be embedded in the Ecwid iframe
+app.use("/admin", (req, res, next) => {
+  res.removeHeader("X-Frame-Options");
+  res.setHeader("Content-Security-Policy", "frame-ancestors *");
+  next();
 });
 
 // Admin routes — all require a valid Ecwid iframe session
