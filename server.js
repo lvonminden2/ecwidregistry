@@ -605,7 +605,7 @@ app.get("/admin/registry/:id", async (req, res) => {
   let skuResults = [];
   let skuError = null;
   if (skuSearch) {
-    const creds = resolveStoreCredentials(req.ecwid?.store_id);
+    const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
     const result = await searchEcwidProductsBySku(skuSearch, creds.storeId, creds.accessToken);
     skuResults = result.items;
     skuError = result.error;
@@ -711,7 +711,9 @@ app.post("/admin/settings", (req, res) => {
 app.post("/admin/registry/:id/items", async (req, res) => {
   const registryId = Number(req.params.id);
   const { product_id, product_name, product_sku, desired_qty } = req.body;
-  const creds = resolveStoreCredentials(req.ecwid?.store_id);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
+  if (!registry) return res.status(404).send("Not found");
+  const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
   let productId = Number(product_id || 0);
   let name = product_name?.trim() || null;
   let sku = product_sku?.trim() || null;
