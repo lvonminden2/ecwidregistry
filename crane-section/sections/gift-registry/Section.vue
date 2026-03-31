@@ -457,9 +457,12 @@ onMounted(() => {
     w.Ecwid.Cart.get(onCartChanged);
   }
 
-  // Inject the global cart guard once — it persists across SPA navigation so
-  // the guard runs even when the user is on a regular product page.
-  if (!document.querySelector('script[data-registry-guard]')) {
+  // Activate the global cart guard if portal.js hasn't already done so.
+  // portal.js (which merchants add to every page) inlines the same guard;
+  // this call is a backup for the registry page itself so SPA navigation
+  // to the product page is also covered without a network round-trip.
+  if (!w.__regCartGuardInstalled) {
+    // Load the standalone script; portal.js already covers the global case.
     const script = document.createElement('script');
     script.setAttribute('data-registry-guard', '1');
     script.src = `${serverUrl.value}/widget/cart-guard.js`;
