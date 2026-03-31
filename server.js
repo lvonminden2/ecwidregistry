@@ -2819,23 +2819,38 @@ app.get("/widget/registry.js", (req, res) => {
                   if (settled) return;
                   var items = (cart && (cart.items || cart.products)) || [];
                   var found = Array.isArray(items) && items.some(function(it) {
-                    var id = Number(it?.productId || it?.id || it?.product?.id || 0);
-                    return id === Number(productId);
+                    var pid = Number(
+                      (it && (it.productId || (it.product && it.product.id) || it.id)) || 0
+                    );
+                    return pid === Number(productId);
                   });
                   if (found) finish(true, 'Added to cart.');
                 }
                 try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.add(_onCartChanged); } catch(e){}
 
-                // Fire addProduct — callback may or may not fire on Instant Sites
+                // Fire addProduct — use the modern object form so the callback
+                // is reliably invoked; also handle if it returns a Promise.
                 console.log('[registry] adding product', productId);
                 try {
-                  Ecwid.Cart.addProduct(productId, 1, function(success){
-                    console.log('[registry] addProduct callback:', success);
-                    finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
-                  });
+                  const addResult = Ecwid.Cart.addProduct(
+                    { id: productId, quantity: 1 },
+                    function(success){
+                      console.log('[registry] addProduct callback:', success);
+                      finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
+                    }
+                  );
+                  // Newer Ecwid versions return a Promise — handle it too
+                  if (addResult && typeof addResult.then === 'function') {
+                    addResult.then(function(){
+                      finish(true, 'Added to cart.');
+                    }).catch(function(){
+                      finish(false, 'Failed to add to cart.');
+                    });
+                  }
                 } catch (err) {
                   console.log('[registry] addProduct error:', err);
                   untrackRegItem(productId, registry.id);
+                  finish(false, 'Failed to add to cart.');
                 }
 
                 // Fallback: assume success after 2s (item was likely added)
