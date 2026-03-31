@@ -2934,6 +2934,85 @@ app.get("/widget/portal.js", (req, res) => {
   var _plId   = 'registry-portal-inline-wrap';
   var _frameId = 'registry-portal-iframe';
   var _initDone = false;
+
+  // ── Registry cart guard (inlined for zero-latency global coverage) ────────
+  // portal.js is loaded on every storefront page via Settings > Custom JS,
+  // so inlining the guard here ensures it runs immediately on every page —
+  // no extra network fetch, no timing gap.
+  if (!window.__regCartGuardInstalled) {
+    window.__regCartGuardInstalled = true;
+
+    function _guardShowToast() {
+      var existing = document.getElementById('reg-guard-toast');
+      if (existing) { clearTimeout(existing._timer); existing.parentNode && existing.parentNode.removeChild(existing); }
+      var toast = document.createElement('div');
+      toast.id = 'reg-guard-toast';
+      toast.setAttribute('style', [
+        'position:fixed','bottom:24px','left:50%','transform:translateX(-50%)',
+        'background:#1a1a1a','color:#fff','padding:14px 20px 14px 16px',
+        'border-radius:8px','font-family:inherit','font-size:14px',
+        'z-index:2147483647','box-shadow:0 4px 20px rgba(0,0,0,0.35)',
+        'max-width:420px','width:calc(100% - 48px)','text-align:center',
+        'display:flex','align-items:flex-start','gap:12px'
+      ].join(';'));
+      var msg = document.createElement('span');
+      msg.style.flex = '1';
+      msg.textContent = 'Regular items cannot be added while registry items are in your cart. Visit the registry page to clear your cart first.';
+      var close = document.createElement('button');
+      close.setAttribute('style','background:none;border:none;color:#aaa;cursor:pointer;font-size:18px;line-height:1;padding:0;flex-shrink:0;');
+      close.textContent = '\u00d7';
+      close.onclick = function(){ toast.parentNode && toast.parentNode.removeChild(toast); };
+      toast.appendChild(msg);
+      toast.appendChild(close);
+      document.body.appendChild(toast);
+      toast._timer = setTimeout(function(){ toast.parentNode && toast.parentNode.removeChild(toast); }, 6000);
+    }
+
+    function _guardOnCartChanged(cart) {
+      var regItems = {};
+      try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+      // Update _cart_pids cache regardless
+      var items = (cart && (cart.items || cart.products)) || [];
+      try {
+        var pids = [];
+        for (var i = 0; i < items.length; i++) {
+          var p = (items[i] && items[i].product) || items[i];
+          var id = String((p && p.id) || items[i].productId || 0);
+          if (id !== '0') pids.push(id);
+        }
+        localStorage.setItem('_cart_pids', JSON.stringify(pids));
+      } catch(e) {}
+      // Guard: eject non-registry items when a registry session is active
+      if (Object.keys(regItems).length === 0) return;
+      var hadConflict = false;
+      for (var j = items.length - 1; j >= 0; j--) {
+        var product = (items[j] && items[j].product) || items[j];
+        var pid = String((product && product.id) || items[j].productId || 0);
+        if (pid === '0') continue;
+        var tracked = regItems[pid];
+        if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+          if (window.Ecwid && Ecwid.Cart && typeof Ecwid.Cart.removeProduct === 'function') {
+            Ecwid.Cart.removeProduct(j);
+          }
+          hadConflict = true;
+        }
+      }
+      if (hadConflict) _guardShowToast();
+    }
+
+    function _guardSubscribe() {
+      if (window.Ecwid && Ecwid.OnCartChanged && Ecwid.OnCartChanged.add) {
+        Ecwid.OnCartChanged.add(_guardOnCartChanged);
+        if (typeof Ecwid.Cart.get === 'function') Ecwid.Cart.get(_guardOnCartChanged);
+        return true;
+      }
+      return false;
+    }
+    if (!_guardSubscribe()) {
+      var _gPoll = setInterval(function(){ if (_guardSubscribe()) clearInterval(_gPoll); }, 300);
+    }
+  }
+
   // All Ecwid page types that constitute "the account section"
   var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES',
                     'RESET_PASSWORD','SIGN_IN','ACCOUNT'];
