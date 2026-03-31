@@ -295,10 +295,47 @@ function decryptEcwidPayload(payload) {
 
 app.use((req, res, next) => {
   req.ecwid = req.session?.ecwid || null;
+
+  // Safari ITP fallback: if no session cookie, try the _t admin token
+  if (!req.ecwid && (req.query._t || req.body?._t)) {
+    const token = req.query._t || req.body._t;
+    const storeId = verifyAdminToken(token);
+    if (storeId) {
+      const store = getStore(storeId);
+      if (store) {
+        req.ecwid = { store_id: store.store_id, access_token: store.access_token, public_token: store.public_token || "", lang: "" };
+        // Try to restore the session for subsequent requests (may work in Chrome)
+        req.session.ecwid = req.ecwid;
+      }
+    }
+  }
+
   res.locals.ecwid = req.ecwid;
   res.locals.ecwidClientId = ECWID_CLIENT_ID;
   // Resolved public registry base URL: Ecwid storefront page if configured, else our own /registry
   res.locals.publicRegistryUrl = getPublicRegistryUrl() || (BASE_URL + "/registry");
+
+  // Generate admin token for Safari ITP cookie-free auth propagation
+  const adminStoreId = req.ecwid?.store_id;
+  if (adminStoreId) {
+    res.locals.adminToken = createAdminToken(adminStoreId);
+  } else {
+    res.locals.adminToken = "";
+  }
+
+  // Wrap res.redirect to auto-append _t token on admin routes
+  const origRedirect = res.redirect.bind(res);
+  res.redirect = function(statusOrUrl, maybeUrl) {
+    // Express supports redirect(url) and redirect(status, url)
+    let url = maybeUrl !== undefined ? maybeUrl : statusOrUrl;
+    if (res.locals.adminToken && typeof url === "string" && url.startsWith("/admin")) {
+      const sep = url.includes("?") ? "&" : "?";
+      url = url + sep + "_t=" + encodeURIComponent(res.locals.adminToken);
+    }
+    if (maybeUrl !== undefined) return origRedirect(statusOrUrl, url);
+    return origRedirect(url);
+  };
+
   next();
 });
 
@@ -544,6 +581,31 @@ function verifyPortalToken(token) {
   }
 }
 
+// ── Admin store token (cookie-free auth for Safari ITP) ───────────────────────
+// Safari blocks third-party cookies in iframes, so we propagate store identity
+// via a signed URL token (_t) instead of relying on session cookies.
+function createAdminToken(storeId) {
+  const ts = Date.now();
+  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(`admin:${storeId}:${ts}`).digest("hex");
+  return `${storeId}_${ts}_${sig}`;
+}
+function verifyAdminToken(token) {
+  try {
+    const parts = String(token || "").split("_");
+    if (parts.length !== 3) return null;
+    const [storeId, tsStr, sig] = parts;
+    const ts = Number(tsStr);
+    if (!storeId || !ts) return null;
+    if (Date.now() - ts > 2 * 60 * 60 * 1000) return null; // 2-hour expiry
+    const expected = crypto.createHmac("sha256", SESSION_SECRET).update(`admin:${storeId}:${ts}`).digest("hex");
+    if (sig.length !== expected.length) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
+    return storeId;
+  } catch {
+    return null;
+  }
+}
+
 // Native app iframe entrypoint
 app.get("/ecwid/iframe", (req, res) => {
   // Allow Ecwid to embed this page in an iframe
@@ -582,6 +644,10 @@ app.get("/ecwid/iframe", (req, res) => {
   // Explicitly save the session so the cookie is guaranteed to be set in this
   // response before the admin HTML is sent (avoids timing issues with lazy-save).
   const storeId = req.session.ecwid?.store_id;
+  // Generate admin token for this iframe session (Safari ITP workaround)
+  if (storeId) {
+    res.locals.adminToken = createAdminToken(storeId);
+  }
   req.session.save(() => {
     let registries;
     if (storeId) {
