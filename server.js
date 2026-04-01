@@ -17,7 +17,6 @@ const PORT = process.env.PORT || 3000;
 const ECWID_CLIENT_ID = process.env.ECWID_CLIENT_ID || "";
 const ECWID_CLIENT_SECRET = process.env.ECWID_CLIENT_SECRET || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || "dev_session_secret";
-const ALLOW_NO_ECWID = (process.env.ALLOW_NO_ECWID || "true").toLowerCase() === "true";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 // Legacy single-store env vars — used as fallbacks when no per-store record exists
 const LEGACY_ECWID_STORE_ID = process.env.ECWID_STORE_ID || "";
@@ -30,6 +29,7 @@ const REGISTRY_PAGE_URL = process.env.REGISTRY_PAGE_URL || '';
 // Shipping rates for custom shipping handler
 const SHIPPING_FLAT_RATE = Number(process.env.SHIPPING_FLAT_RATE || 5.99);
 const SHIPPING_FREE_THRESHOLD = Number(process.env.SHIPPING_FREE_THRESHOLD || 0);
+const ALLOW_NO_ECWID = process.env.ALLOW_NO_ECWID === "true";
 
 const app = express();
 app.set("trust proxy", 1); // Required for Railway/Heroku — trusts X-Forwarded-Proto for secure cookies
@@ -295,10 +295,47 @@ function decryptEcwidPayload(payload) {
 
 app.use((req, res, next) => {
   req.ecwid = req.session?.ecwid || null;
+
+  // Safari ITP fallback: if no session cookie, try the _t admin token
+  if (!req.ecwid && (req.query._t || req.body?._t)) {
+    const token = req.query._t || req.body._t;
+    const storeId = verifyAdminToken(token);
+    if (storeId) {
+      const store = getStore(storeId);
+      if (store) {
+        req.ecwid = { store_id: store.store_id, access_token: store.access_token, public_token: store.public_token || "", lang: "" };
+        // Try to restore the session for subsequent requests (may work in Chrome)
+        req.session.ecwid = req.ecwid;
+      }
+    }
+  }
+
   res.locals.ecwid = req.ecwid;
   res.locals.ecwidClientId = ECWID_CLIENT_ID;
   // Resolved public registry base URL: Ecwid storefront page if configured, else our own /registry
   res.locals.publicRegistryUrl = getPublicRegistryUrl() || (BASE_URL + "/registry");
+
+  // Generate admin token for Safari ITP cookie-free auth propagation
+  const adminStoreId = req.ecwid?.store_id;
+  if (adminStoreId) {
+    res.locals.adminToken = createAdminToken(adminStoreId);
+  } else {
+    res.locals.adminToken = "";
+  }
+
+  // Wrap res.redirect to auto-append _t token on admin routes
+  const origRedirect = res.redirect.bind(res);
+  res.redirect = function(statusOrUrl, maybeUrl) {
+    // Express supports redirect(url) and redirect(status, url)
+    let url = maybeUrl !== undefined ? maybeUrl : statusOrUrl;
+    if (res.locals.adminToken && typeof url === "string" && url.startsWith("/admin")) {
+      const sep = url.includes("?") ? "&" : "?";
+      url = url + sep + "_t=" + encodeURIComponent(res.locals.adminToken);
+    }
+    if (maybeUrl !== undefined) return origRedirect(statusOrUrl, url);
+    return origRedirect(url);
+  };
+
   next();
 });
 
@@ -488,6 +525,39 @@ function requireRegistrant(req, res, next) {
   next();
 }
 
+// ── Ecwid iframe auth middleware ───────────────────────────────────────────────
+function requireEcwid(req, res, next) {
+  if (req.ecwid) return next();
+
+  // Always try to bootstrap from the Ecwid payload query param when present.
+  // This handles the case where the iframeUrl is configured as /admin
+  // instead of /ecwid/iframe, or when the session cookie is lost.
+  if (req.query.payload && ECWID_CLIENT_SECRET) {
+    const data = decryptEcwidPayload(req.query.payload);
+    if (data) {
+      const storeId = String(data.store_id || data.storeId || "");
+      const accessToken = data.access_token || data.accessToken || "";
+      const publicToken = data.public_token || data.publicToken || "";
+      req.session.ecwid = { store_id: storeId, access_token: accessToken, public_token: publicToken, lang: data.lang || "" };
+      req.ecwid = req.session.ecwid;
+      res.locals.ecwid = req.ecwid;
+      if (storeId && accessToken) {
+        upsertStore(storeId, accessToken, publicToken);
+        deployCraneSection(storeId);
+      }
+      return next();
+    }
+  }
+
+  if (ALLOW_NO_ECWID) {
+    req.ecwid = { store_id: LEGACY_ECWID_STORE_ID, access_token: LEGACY_ECWID_ACCESS_TOKEN, public_token: "", lang: "" };
+    res.locals.ecwid = req.ecwid;
+    return next();
+  }
+
+  return res.status(401).send("This app must be opened from the Ecwid admin panel.");
+}
+
 // Short-lived signed token for cross-origin iframe bootstrap (avoids third-party cookie issues)
 function createPortalToken(accountId) {
   const ts = Date.now();
@@ -506,6 +576,31 @@ function verifyPortalToken(token) {
     const expected = crypto.createHmac("sha256", SESSION_SECRET).update(`${id}:${ts}`).digest("hex");
     if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
     return db.prepare("SELECT * FROM registry_account WHERE id = ?").get(id) || null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Admin store token (cookie-free auth for Safari ITP) ───────────────────────
+// Safari blocks third-party cookies in iframes, so we propagate store identity
+// via a signed URL token (_t) instead of relying on session cookies.
+function createAdminToken(storeId) {
+  const ts = Date.now();
+  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(`admin:${storeId}:${ts}`).digest("hex");
+  return `${storeId}_${ts}_${sig}`;
+}
+function verifyAdminToken(token) {
+  try {
+    const parts = String(token || "").split("_");
+    if (parts.length !== 3) return null;
+    const [storeId, tsStr, sig] = parts;
+    const ts = Number(tsStr);
+    if (!storeId || !ts) return null;
+    if (Date.now() - ts > 2 * 60 * 60 * 1000) return null; // 2-hour expiry
+    const expected = crypto.createHmac("sha256", SESSION_SECRET).update(`admin:${storeId}:${ts}`).digest("hex");
+    if (sig.length !== expected.length) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"))) return null;
+    return storeId;
   } catch {
     return null;
   }
@@ -546,22 +641,35 @@ app.get("/ecwid/iframe", (req, res) => {
     console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET — skipping payload verification");
   }
 
-  // Render admin directly (avoid redirect — some iframe hosts treat 302 as an error)
+  // Explicitly save the session so the cookie is guaranteed to be set in this
+  // response before the admin HTML is sent (avoids timing issues with lazy-save).
   const storeId = req.session.ecwid?.store_id;
-  let registries;
+  // Generate admin token for this iframe session (Safari ITP workaround)
   if (storeId) {
-    registries = db.prepare("SELECT * FROM registry WHERE store_id = ? ORDER BY created_at DESC").all(storeId);
-  } else {
-    registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
+    res.locals.adminToken = createAdminToken(storeId);
   }
-  return res.render("admin/index", { registries, actionError: null, actionInfo: null });
+  req.session.save(() => {
+    let registries;
+    if (storeId) {
+      registries = db.prepare("SELECT * FROM registry WHERE store_id = ? ORDER BY created_at DESC").all(storeId);
+    } else {
+      registries = db.prepare("SELECT * FROM registry ORDER BY created_at DESC").all();
+    }
+    res.render("admin/index", { registries, actionError: null, actionInfo: null });
+  });
 });
 
-// Admin routes
+// Allow all /admin routes to be embedded in the Ecwid iframe
+app.use("/admin", (req, res, next) => {
+  res.removeHeader("X-Frame-Options");
+  res.setHeader("Content-Security-Policy", "frame-ancestors *");
+  next();
+});
+
+// Admin routes — all require a valid Ecwid iframe session
+app.use("/admin", requireEcwid);
+
 app.get("/admin", (req, res) => {
-  if (!req.ecwid && !ALLOW_NO_ECWID) {
-    return res.status(401).send("Not authorized");
-  }
   let registries = [];
   if (req.ecwid?.store_id) {
     registries = db
@@ -584,7 +692,7 @@ app.get("/admin/registry/new", (req, res) => {
 
 app.post("/admin/registry", (req, res) => {
   const { display_name, event_date } = req.body;
-  const storeId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || null;
+  const storeId = req.ecwid.store_id;
   const type = "online";
   const stmt = db.prepare(
     "INSERT INTO registry (display_name, event_date, registry_type, store_id) VALUES (?, ?, ?, ?)"
@@ -605,7 +713,7 @@ app.get("/admin/registry/:id", async (req, res) => {
   let skuResults = [];
   let skuError = null;
   if (skuSearch) {
-    const creds = resolveStoreCredentials(req.ecwid?.store_id);
+    const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
     const result = await searchEcwidProductsBySku(skuSearch, creds.storeId, creds.accessToken);
     skuResults = result.items;
     skuError = result.error;
@@ -616,7 +724,7 @@ app.get("/admin/registry/:id", async (req, res) => {
   const portalLoginUrl = `${BASE_URL}/portal/login`;
   const portalWidgetUrl = `${BASE_URL}/widget/portal.js`;
   const cartWidgetUrl = `${BASE_URL}/widget/cart.js`;
-  const ecwidStoreId = req.ecwid?.store_id || registry.store_id || LEGACY_ECWID_STORE_ID || '';
+  const ecwidStoreId = req.ecwid.store_id || registry.store_id;
   res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId });
 });
 
@@ -653,11 +761,7 @@ app.post("/admin/registry/:id/shipping", (req, res) => {
 
 // ── Settings page ─────────────────────────────────────────────────────────────
 app.get("/admin/settings", (req, res) => {
-  if (!req.ecwid && !ALLOW_NO_ECWID) {
-    return res.status(401).send("Not authorized");
-  }
-
-  const storeId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || '';
+  const storeId = req.ecwid.store_id;
   const creds = resolveStoreCredentials(storeId);
   const settings = {
     shippingFlatRate: storeId ? Number(getStoreSetting(storeId, 'shipping_flat_rate') || getShippingFlatRate()) : getShippingFlatRate(),
@@ -684,10 +788,6 @@ app.get("/admin/settings", (req, res) => {
 });
 
 app.post("/admin/settings", (req, res) => {
-  if (!req.ecwid && !ALLOW_NO_ECWID) {
-    return res.status(401).send("Not authorized");
-  }
-
   const { shipping_flat_rate, shipping_free_threshold, public_registry_url, registry_page_url } = req.body;
 
   const flatRate = Number(shipping_flat_rate);
@@ -699,7 +799,7 @@ app.post("/admin/settings", (req, res) => {
     return res.redirect("/admin/settings?error=" + encodeURIComponent("Free threshold must be a non-negative number."));
   }
 
-  const saveStoreId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || '';
+  const saveStoreId = req.ecwid.store_id;
   setStoreSetting(saveStoreId, 'shipping_flat_rate', String(flatRate));
   setStoreSetting(saveStoreId, 'shipping_free_threshold', String(freeThreshold));
   setStoreSetting(saveStoreId, 'public_registry_url', String(public_registry_url || '').trim());
@@ -711,7 +811,9 @@ app.post("/admin/settings", (req, res) => {
 app.post("/admin/registry/:id/items", async (req, res) => {
   const registryId = Number(req.params.id);
   const { product_id, product_name, product_sku, desired_qty } = req.body;
-  const creds = resolveStoreCredentials(req.ecwid?.store_id);
+  const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
+  if (!registry) return res.status(404).send("Not found");
+  const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
   let productId = Number(product_id || 0);
   let name = product_name?.trim() || null;
   let sku = product_sku?.trim() || null;
@@ -1656,7 +1758,7 @@ app.post("/webhooks/ecwid/order-created", express.raw({ type: "*/*" }), async (r
 // ─── Manual sync: fetch recent orders from Ecwid and process any that contain
 // registry items. Use this to backfill orders placed before the webhook was fixed.
 app.post("/admin/sync-orders", async (req, res) => {
-  const syncStoreId = req.ecwid?.store_id || LEGACY_ECWID_STORE_ID || "";
+  const syncStoreId = req.ecwid.store_id;
   const syncCreds = resolveStoreCredentials(syncStoreId);
   if (!syncCreds.accessToken || !syncCreds.storeId) {
     return res.redirect("/admin?error=" + encodeURIComponent("Ecwid API credentials not configured."));
@@ -2738,23 +2840,38 @@ app.get("/widget/registry.js", (req, res) => {
                   if (settled) return;
                   var items = (cart && (cart.items || cart.products)) || [];
                   var found = Array.isArray(items) && items.some(function(it) {
-                    var id = Number(it?.productId || it?.id || it?.product?.id || 0);
-                    return id === Number(productId);
+                    var pid = Number(
+                      (it && (it.productId || (it.product && it.product.id) || it.id)) || 0
+                    );
+                    return pid === Number(productId);
                   });
                   if (found) finish(true, 'Added to cart.');
                 }
                 try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.add(_onCartChanged); } catch(e){}
 
-                // Fire addProduct — callback may or may not fire on Instant Sites
+                // Fire addProduct — use the modern object form so the callback
+                // is reliably invoked; also handle if it returns a Promise.
                 console.log('[registry] adding product', productId);
                 try {
-                  Ecwid.Cart.addProduct(productId, 1, function(success){
-                    console.log('[registry] addProduct callback:', success);
-                    finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
-                  });
+                  const addResult = Ecwid.Cart.addProduct(
+                    { id: productId, quantity: 1 },
+                    function(success){
+                      console.log('[registry] addProduct callback:', success);
+                      finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
+                    }
+                  );
+                  // Newer Ecwid versions return a Promise — handle it too
+                  if (addResult && typeof addResult.then === 'function') {
+                    addResult.then(function(){
+                      finish(true, 'Added to cart.');
+                    }).catch(function(){
+                      finish(false, 'Failed to add to cart.');
+                    });
+                  }
                 } catch (err) {
                   console.log('[registry] addProduct error:', err);
                   untrackRegItem(productId, registry.id);
+                  finish(false, 'Failed to add to cart.');
                 }
 
                 // Fallback: assume success after 2s (item was likely added)

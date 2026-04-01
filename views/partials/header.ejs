@@ -27,6 +27,43 @@
         });
       }
     </script>
+    <% if (typeof adminToken !== 'undefined' && adminToken) { %>
+    <script>
+      // Safari ITP: propagate admin store token via URL params since cookies are blocked
+      (function() {
+        var t = "<%= adminToken %>";
+        if (!t) return;
+        function addToken(url) {
+          if (!url || !url.startsWith('/admin')) return url;
+          return url + (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + encodeURIComponent(t);
+        }
+        document.addEventListener('click', function(e) {
+          var a = e.target.closest('a[href]');
+          if (a && a.getAttribute('href') && a.getAttribute('href').startsWith('/admin')) {
+            a.href = addToken(a.getAttribute('href'));
+          }
+        }, true);
+        document.addEventListener('submit', function(e) {
+          var form = e.target;
+          if (form.tagName === 'FORM' && form.action) {
+            try {
+              var u = new URL(form.action, location.origin);
+              if (u.pathname.startsWith('/admin')) {
+                var inp = form.querySelector('input[name="_t"]');
+                if (!inp) {
+                  inp = document.createElement('input');
+                  inp.type = 'hidden';
+                  inp.name = '_t';
+                  form.appendChild(inp);
+                }
+                inp.value = t;
+              }
+            } catch(err) {}
+          }
+        }, true);
+      })();
+    </script>
+    <% } %>
   </head>
   <body>
     <div class="page">
