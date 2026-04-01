@@ -1763,32 +1763,51 @@ app.get("/widget/cart-guard.js", (req, res) => {
     toast._timer = setTimeout(function(){ toast.parentNode && toast.parentNode.removeChild(toast); }, 6000);
   }
 
-  function onCartChanged(cart) {
+  // Only one Cart.get allowed in-flight at a time to avoid locking the cart API.
+  var _checkInFlight = false;
+  var _checkQueued   = false;
+
+  function checkCart() {
+    if (_checkInFlight) { _checkQueued = true; return; }
     var regItems = {};
     try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-    if (Object.keys(regItems).length === 0) {
-      // No registry session — just keep _cart_pids fresh
-      _updatePids(cart); return;
-    }
-    var items = (cart && (cart.items || cart.products)) || [];
-    var hadConflict = false;
-    for (var j = items.length - 1; j >= 0; j--) {
-      var product = (items[j] && items[j].product) || items[j];
-      var pid = String((product && product.id) || items[j].productId || 0);
-      if (pid === '0') continue;
-      var tracked = regItems[pid];
-      if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
-        if (window.Ecwid && Ecwid.Cart && typeof Ecwid.Cart.removeProduct === 'function') {
-          Ecwid.Cart.removeProduct(j);
+    if (Object.keys(regItems).length === 0) return;
+    if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+    _checkInFlight = true;
+    Ecwid.Cart.get(function(cart) {
+      _checkInFlight = false;
+      var queued = _checkQueued; _checkQueued = false;
+      var items = (cart && (cart.items || cart.products)) || [];
+      try {
+        var pids = [];
+        for (var i = 0; i < items.length; i++) {
+          var p = (items[i] && items[i].product) || items[i];
+          var id = String((p && p.id) || items[i].productId || 0);
+          if (id !== '0') pids.push(id);
         }
-        hadConflict = true;
+        localStorage.setItem('_cart_pids', JSON.stringify(pids));
+      } catch(e) {}
+      var ri = {};
+      try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+      if (Object.keys(ri).length === 0) { if (queued) checkCart(); return; }
+      var hadConflict = false;
+      for (var j = items.length - 1; j >= 0; j--) {
+        var product = (items[j] && items[j].product) || items[j];
+        var pid = String((product && product.id) || items[j].productId || 0);
+        if (pid === '0') continue;
+        var tracked = ri[pid];
+        if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+          Ecwid.Cart.removeProduct(j);
+          hadConflict = true;
+        }
       }
-    }
-    if (hadConflict) showGuardToast();
-    _updatePids(cart);
+      if (hadConflict) showGuardToast();
+      if (queued) setTimeout(checkCart, 200);
+    });
   }
 
-  function _updatePids(cart) {
+  function onCartChanged(cart) {
+    // Update _cart_pids synchronously from the event payload (no Cart.get needed)
     try {
       var items = (cart && (cart.items || cart.products)) || [];
       var pids = [];
@@ -1799,15 +1818,17 @@ app.get("/widget/cart-guard.js", (req, res) => {
       }
       localStorage.setItem('_cart_pids', JSON.stringify(pids));
     } catch(e) {}
+    // Defer the Cart.get check so we're outside the OnCartChanged context
+    setTimeout(checkCart, 200);
   }
 
   function subscribe() {
-    if (window.Ecwid && Ecwid.OnCartChanged && Ecwid.OnCartChanged.add) {
-      Ecwid.OnCartChanged.add(onCartChanged);
-      if (typeof Ecwid.Cart.get === 'function') Ecwid.Cart.get(onCartChanged);
-      return true;
+    if (!window.Ecwid || !Ecwid.OnCartChanged || !Ecwid.OnCartChanged.add) return false;
+    Ecwid.OnCartChanged.add(onCartChanged);
+    if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
+      Ecwid.OnPageLoaded.add(function(){ setTimeout(checkCart, 500); });
     }
-    return false;
+    return true;
   }
   if (!subscribe()) {
     var _poll = setInterval(function(){ if (subscribe()) clearInterval(_poll); }, 500);
@@ -2811,12 +2832,129 @@ app.get("/widget/registry.js", (req, res) => {
 // portal as an inline iframe inside their account section — no separate page needed.
 app.get("/widget/portal.js", (req, res) => {
   res.type("application/javascript");
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.set("Pragma", "no-cache");
   res.send(`
 (function(){
   var baseUrl = "${BASE_URL}";
   var _plId   = 'registry-portal-inline-wrap';
   var _frameId = 'registry-portal-iframe';
   var _initDone = false;
+
+  // ── Registry cart guard (inlined for zero-latency global coverage) ────────
+  // portal.js is loaded on every storefront page via Settings > Custom JS.
+  // Three triggers: OnCartChanged (real-time), OnPageLoaded (every navigation),
+  // and a 3-second poll while a registry session is active. This covers cases
+  // where OnCartChanged doesn't fire for native Ecwid Add-to-Cart buttons.
+  if (!window.__regCartGuardInstalled) {
+    window.__regCartGuardInstalled = true;
+
+    var _guardInFlight = false;
+    var _guardQueued   = false;
+
+    function _guardShowToast() {
+      var existing = document.getElementById('reg-guard-toast');
+      if (existing) { clearTimeout(existing._timer); existing.parentNode && existing.parentNode.removeChild(existing); }
+      var toast = document.createElement('div');
+      toast.id = 'reg-guard-toast';
+      toast.setAttribute('style', [
+        'position:fixed','bottom:24px','left:50%','transform:translateX(-50%)',
+        'background:#1a1a1a','color:#fff','padding:14px 20px 14px 16px',
+        'border-radius:8px','font-family:inherit','font-size:14px',
+        'z-index:2147483647','box-shadow:0 4px 20px rgba(0,0,0,0.35)',
+        'max-width:420px','width:calc(100% - 48px)','text-align:center',
+        'display:flex','align-items:flex-start','gap:12px'
+      ].join(';'));
+      var msg = document.createElement('span');
+      msg.style.flex = '1';
+      msg.textContent = 'Regular items cannot be added while registry items are in your cart. Visit the registry page to clear your cart first.';
+      var close = document.createElement('button');
+      close.setAttribute('style','background:none;border:none;color:#aaa;cursor:pointer;font-size:18px;line-height:1;padding:0;flex-shrink:0;');
+      close.textContent = '\u00d7';
+      close.onclick = function(){ toast.parentNode && toast.parentNode.removeChild(toast); };
+      toast.appendChild(msg);
+      toast.appendChild(close);
+      document.body.appendChild(toast);
+      toast._timer = setTimeout(function(){ toast.parentNode && toast.parentNode.removeChild(toast); }, 6000);
+    }
+
+    // Core check: calls Cart.get for canonical state, removes non-registry items.
+    // Using Cart.get (rather than the OnCartChanged cart arg) is more reliable
+    // for removal because we're not inside the cart-changed callback context.
+    function _guardCheckCart() {
+      if (_guardInFlight) { _guardQueued = true; return; }
+      var regItems = {};
+      try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+      if (Object.keys(regItems).length === 0) return;
+      if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+      _guardInFlight = true;
+      Ecwid.Cart.get(function(cart) {
+        _guardInFlight = false;
+        var wasQueued = _guardQueued; _guardQueued = false;
+        var items = (cart && (cart.items || cart.products)) || [];
+        // Refresh _cart_pids cache
+        try {
+          var pids = [];
+          for (var i = 0; i < items.length; i++) {
+            var p = (items[i] && items[i].product) || items[i];
+            var id = String((p && p.id) || items[i].productId || 0);
+            if (id !== '0') pids.push(id);
+          }
+          localStorage.setItem('_cart_pids', JSON.stringify(pids));
+        } catch(e) {}
+        // Re-read regItems in case it changed while waiting for Cart.get
+        var ri = {};
+        try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+        if (Object.keys(ri).length === 0) { if (wasQueued) setTimeout(_guardCheckCart, 200); return; }
+        var hadConflict = false;
+        for (var j = items.length - 1; j >= 0; j--) {
+          var product = (items[j] && items[j].product) || items[j];
+          var pid = String((product && product.id) || items[j].productId || 0);
+          if (pid === '0') continue;
+          var tracked = ri[pid];
+          if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+            Ecwid.Cart.removeProduct(j);
+            hadConflict = true;
+          }
+        }
+        if (hadConflict) _guardShowToast();
+        if (wasQueued) setTimeout(_guardCheckCart, 200);
+      });
+    }
+
+    function _guardOnCartChanged(cart) {
+      // Update _cart_pids from the event payload immediately (no async needed)
+      try {
+        var items = (cart && (cart.items || cart.products)) || [];
+        var pids = [];
+        for (var i = 0; i < items.length; i++) {
+          var p = (items[i] && items[i].product) || items[i];
+          var id = String((p && p.id) || items[i].productId || 0);
+          if (id !== '0') pids.push(id);
+        }
+        localStorage.setItem('_cart_pids', JSON.stringify(pids));
+      } catch(e) {}
+      // Defer the actual removal so we're outside the OnCartChanged callback
+      // context — some Ecwid versions ignore removeProduct calls made inline.
+      setTimeout(_guardCheckCart, 150);
+    }
+
+    function _guardSubscribe() {
+      if (!window.Ecwid || !Ecwid.OnCartChanged || !Ecwid.OnCartChanged.add) return false;
+      Ecwid.OnCartChanged.add(_guardOnCartChanged);
+      if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
+        Ecwid.OnPageLoaded.add(function(){ setTimeout(_guardCheckCart, 400); });
+      }
+      // Immediate check for items already in cart
+      setTimeout(_guardCheckCart, 500);
+      return true;
+    }
+
+    if (!_guardSubscribe()) {
+      var _gPoll = setInterval(function(){ if (_guardSubscribe()) clearInterval(_gPoll); }, 300);
+    }
+  }
+
   // All Ecwid page types that constitute "the account section"
   var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES',
                     'RESET_PASSWORD','SIGN_IN','ACCOUNT'];
