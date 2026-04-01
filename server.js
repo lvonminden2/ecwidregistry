@@ -1865,17 +1865,20 @@ app.get("/widget/cart-guard.js", (req, res) => {
     toast._timer = setTimeout(function(){ toast.parentNode && toast.parentNode.removeChild(toast); }, 6000);
   }
 
-  var _guardPollTimer = null;
+  // Only one Cart.get allowed in-flight at a time to avoid locking the cart API.
+  var _checkInFlight = false;
+  var _checkQueued   = false;
 
   function checkCart() {
+    if (_checkInFlight) { _checkQueued = true; return; }
     var regItems = {};
     try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-    if (Object.keys(regItems).length === 0) {
-      if (_guardPollTimer) { clearInterval(_guardPollTimer); _guardPollTimer = null; }
-      return;
-    }
+    if (Object.keys(regItems).length === 0) return;
     if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+    _checkInFlight = true;
     Ecwid.Cart.get(function(cart) {
+      _checkInFlight = false;
+      var queued = _checkQueued; _checkQueued = false;
       var items = (cart && (cart.items || cart.products)) || [];
       try {
         var pids = [];
@@ -1888,7 +1891,7 @@ app.get("/widget/cart-guard.js", (req, res) => {
       } catch(e) {}
       var ri = {};
       try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-      if (Object.keys(ri).length === 0) return;
+      if (Object.keys(ri).length === 0) { if (queued) checkCart(); return; }
       var hadConflict = false;
       for (var j = items.length - 1; j >= 0; j--) {
         var product = (items[j] && items[j].product) || items[j];
@@ -1901,10 +1904,12 @@ app.get("/widget/cart-guard.js", (req, res) => {
         }
       }
       if (hadConflict) showGuardToast();
+      if (queued) setTimeout(checkCart, 200);
     });
   }
 
   function onCartChanged(cart) {
+    // Update _cart_pids synchronously from the event payload (no Cart.get needed)
     try {
       var items = (cart && (cart.items || cart.products)) || [];
       var pids = [];
@@ -1915,17 +1920,16 @@ app.get("/widget/cart-guard.js", (req, res) => {
       }
       localStorage.setItem('_cart_pids', JSON.stringify(pids));
     } catch(e) {}
-    setTimeout(checkCart, 150);
+    // Defer the Cart.get check so we're outside the OnCartChanged context
+    setTimeout(checkCart, 200);
   }
 
   function subscribe() {
     if (!window.Ecwid || !Ecwid.OnCartChanged || !Ecwid.OnCartChanged.add) return false;
     Ecwid.OnCartChanged.add(onCartChanged);
     if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
-      Ecwid.OnPageLoaded.add(function(){ setTimeout(checkCart, 400); });
+      Ecwid.OnPageLoaded.add(function(){ setTimeout(checkCart, 500); });
     }
-    if (!_guardPollTimer) _guardPollTimer = setInterval(checkCart, 3000);
-    setTimeout(checkCart, 500);
     return true;
   }
   if (!subscribe()) {
@@ -2962,7 +2966,8 @@ app.get("/widget/portal.js", (req, res) => {
   if (!window.__regCartGuardInstalled) {
     window.__regCartGuardInstalled = true;
 
-    var _guardPollTimer = null;
+    var _guardInFlight = false;
+    var _guardQueued   = false;
 
     function _guardShowToast() {
       var existing = document.getElementById('reg-guard-toast');
@@ -2994,14 +2999,15 @@ app.get("/widget/portal.js", (req, res) => {
     // Using Cart.get (rather than the OnCartChanged cart arg) is more reliable
     // for removal because we're not inside the cart-changed callback context.
     function _guardCheckCart() {
+      if (_guardInFlight) { _guardQueued = true; return; }
       var regItems = {};
       try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-      if (Object.keys(regItems).length === 0) {
-        if (_guardPollTimer) { clearInterval(_guardPollTimer); _guardPollTimer = null; }
-        return;
-      }
+      if (Object.keys(regItems).length === 0) return;
       if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
+      _guardInFlight = true;
       Ecwid.Cart.get(function(cart) {
+        _guardInFlight = false;
+        var wasQueued = _guardQueued; _guardQueued = false;
         var items = (cart && (cart.items || cart.products)) || [];
         // Refresh _cart_pids cache
         try {
@@ -3016,7 +3022,7 @@ app.get("/widget/portal.js", (req, res) => {
         // Re-read regItems in case it changed while waiting for Cart.get
         var ri = {};
         try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-        if (Object.keys(ri).length === 0) return;
+        if (Object.keys(ri).length === 0) { if (wasQueued) setTimeout(_guardCheckCart, 200); return; }
         var hadConflict = false;
         for (var j = items.length - 1; j >= 0; j--) {
           var product = (items[j] && items[j].product) || items[j];
@@ -3029,6 +3035,7 @@ app.get("/widget/portal.js", (req, res) => {
           }
         }
         if (hadConflict) _guardShowToast();
+        if (wasQueued) setTimeout(_guardCheckCart, 200);
       });
     }
 
@@ -3049,19 +3056,12 @@ app.get("/widget/portal.js", (req, res) => {
       setTimeout(_guardCheckCart, 150);
     }
 
-    function _guardStartPoll() {
-      if (_guardPollTimer) return;
-      _guardPollTimer = setInterval(_guardCheckCart, 3000);
-    }
-
     function _guardSubscribe() {
       if (!window.Ecwid || !Ecwid.OnCartChanged || !Ecwid.OnCartChanged.add) return false;
       Ecwid.OnCartChanged.add(_guardOnCartChanged);
       if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
         Ecwid.OnPageLoaded.add(function(){ setTimeout(_guardCheckCart, 400); });
       }
-      // Start polling — catches cases where OnCartChanged doesn't fire
-      _guardStartPoll();
       // Immediate check for items already in cart
       setTimeout(_guardCheckCart, 500);
       return true;
