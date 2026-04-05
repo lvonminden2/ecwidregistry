@@ -1763,20 +1763,40 @@ app.get("/widget/cart-guard.js", (req, res) => {
     toast._timer = setTimeout(function(){ toast.parentNode && toast.parentNode.removeChild(toast); }, 6000);
   }
 
-  // Only one Cart.get allowed in-flight at a time to avoid locking the cart API.
+  // Scan a list of cart items and remove any that aren't in _reg_items.
+  // Must be called outside an OnCartChanged callback (use setTimeout).
+  function removeConflicts(items) {
+    var ri = {};
+    try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+    if (Object.keys(ri).length === 0) return;
+    var hadConflict = false;
+    for (var j = items.length - 1; j >= 0; j--) {
+      var product = (items[j] && items[j].product) || items[j];
+      var pid = String((product && product.id) || items[j].productId || 0);
+      if (pid === '0') continue;
+      var tracked = ri[pid];
+      if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+        Ecwid.Cart.removeProduct(j);
+        hadConflict = true;
+      }
+    }
+    if (hadConflict) showGuardToast();
+  }
+
+  // Cart.get-based check used only from OnPageLoaded (safe: user is navigating,
+  // not mid-add). Protected by in-flight flag to prevent concurrent calls.
   var _checkInFlight = false;
   var _checkQueued   = false;
-
-  function checkCart() {
+  function checkCartFull() {
     if (_checkInFlight) { _checkQueued = true; return; }
-    var regItems = {};
-    try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-    if (Object.keys(regItems).length === 0) return;
+    var ri = {};
+    try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+    if (Object.keys(ri).length === 0) return;
     if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
     _checkInFlight = true;
     Ecwid.Cart.get(function(cart) {
       _checkInFlight = false;
-      var queued = _checkQueued; _checkQueued = false;
+      var wasQueued = _checkQueued; _checkQueued = false;
       var items = (cart && (cart.items || cart.products)) || [];
       try {
         var pids = [];
@@ -1787,29 +1807,15 @@ app.get("/widget/cart-guard.js", (req, res) => {
         }
         localStorage.setItem('_cart_pids', JSON.stringify(pids));
       } catch(e) {}
-      var ri = {};
-      try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-      if (Object.keys(ri).length === 0) { if (queued) checkCart(); return; }
-      var hadConflict = false;
-      for (var j = items.length - 1; j >= 0; j--) {
-        var product = (items[j] && items[j].product) || items[j];
-        var pid = String((product && product.id) || items[j].productId || 0);
-        if (pid === '0') continue;
-        var tracked = ri[pid];
-        if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
-          Ecwid.Cart.removeProduct(j);
-          hadConflict = true;
-        }
-      }
-      if (hadConflict) showGuardToast();
-      if (queued) setTimeout(checkCart, 200);
+      removeConflicts(items);
+      if (wasQueued) setTimeout(checkCartFull, 200);
     });
   }
 
   function onCartChanged(cart) {
-    // Update _cart_pids synchronously from the event payload (no Cart.get needed)
+    var items = (cart && (cart.items || cart.products)) || [];
+    // Update _cart_pids cache from event payload — no Cart.get needed.
     try {
-      var items = (cart && (cart.items || cart.products)) || [];
       var pids = [];
       for (var i = 0; i < items.length; i++) {
         var p = (items[i] && items[i].product) || items[i];
@@ -1818,20 +1824,19 @@ app.get("/widget/cart-guard.js", (req, res) => {
       }
       localStorage.setItem('_cart_pids', JSON.stringify(pids));
     } catch(e) {}
-    // Defer the Cart.get check so we're outside the OnCartChanged context
-    setTimeout(checkCart, 200);
+    // Use the event payload directly for conflict detection — avoids Cart.get
+    // on the hot path so add-to-cart is never blocked by our guard.
+    var snapshot = items.slice();
+    setTimeout(function(){ removeConflicts(snapshot); }, 200);
   }
 
   function subscribe() {
     if (!window.Ecwid || !Ecwid.OnCartChanged || !Ecwid.OnCartChanged.add) return false;
     Ecwid.OnCartChanged.add(onCartChanged);
     if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
-      Ecwid.OnPageLoaded.add(function(){ setTimeout(checkCart, 500); });
+      // OnPageLoaded fires on navigation — user isn't mid-add, so Cart.get is safe here.
+      Ecwid.OnPageLoaded.add(function(){ setTimeout(checkCartFull, 1000); });
     }
-    // Slow poll as fallback — OnCartChanged doesn't fire for native Ecwid
-    // Add-to-Cart on product pages on Instant Sites. The in-flight debounce
-    // above ensures only one Cart.get runs at a time, so this is safe.
-    setInterval(checkCart, 5000);
     return true;
   }
   if (!subscribe()) {
@@ -2847,14 +2852,10 @@ app.get("/widget/portal.js", (req, res) => {
 
   // ── Registry cart guard (inlined for zero-latency global coverage) ────────
   // portal.js is loaded on every storefront page via Settings > Custom JS.
-  // Three triggers: OnCartChanged (real-time), OnPageLoaded (every navigation),
-  // and a 3-second poll while a registry session is active. This covers cases
-  // where OnCartChanged doesn't fire for native Ecwid Add-to-Cart buttons.
+  // Two triggers: OnCartChanged (uses event payload — no Cart.get, never blocks
+  // add-to-cart) and OnPageLoaded (uses Cart.get, safe during navigation).
   if (!window.__regCartGuardInstalled) {
     window.__regCartGuardInstalled = true;
-
-    var _guardInFlight = false;
-    var _guardQueued   = false;
 
     function _guardShowToast() {
       var existing = document.getElementById('reg-guard-toast');
@@ -2882,21 +2883,41 @@ app.get("/widget/portal.js", (req, res) => {
       toast._timer = setTimeout(function(){ toast.parentNode && toast.parentNode.removeChild(toast); }, 6000);
     }
 
-    // Core check: calls Cart.get for canonical state, removes non-registry items.
-    // Using Cart.get (rather than the OnCartChanged cart arg) is more reliable
-    // for removal because we're not inside the cart-changed callback context.
-    function _guardCheckCart() {
+    // Scan items and remove any not tracked in _reg_items.
+    // Must be called outside an OnCartChanged callback (use setTimeout).
+    function _guardRemoveConflicts(items) {
+      var ri = {};
+      try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+      if (Object.keys(ri).length === 0) return;
+      var hadConflict = false;
+      for (var j = items.length - 1; j >= 0; j--) {
+        var product = (items[j] && items[j].product) || items[j];
+        var pid = String((product && product.id) || items[j].productId || 0);
+        if (pid === '0') continue;
+        var tracked = ri[pid];
+        if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+          Ecwid.Cart.removeProduct(j);
+          hadConflict = true;
+        }
+      }
+      if (hadConflict) _guardShowToast();
+    }
+
+    // Cart.get-based check — only called from OnPageLoaded (user is navigating,
+    // not mid-add-to-cart). Protected by in-flight flag.
+    var _guardInFlight = false;
+    var _guardQueued   = false;
+    function _guardCheckCartFull() {
       if (_guardInFlight) { _guardQueued = true; return; }
-      var regItems = {};
-      try { regItems = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-      if (Object.keys(regItems).length === 0) return;
+      var ri = {};
+      try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
+      if (Object.keys(ri).length === 0) return;
       if (!window.Ecwid || !Ecwid.Cart || typeof Ecwid.Cart.get !== 'function') return;
       _guardInFlight = true;
       Ecwid.Cart.get(function(cart) {
         _guardInFlight = false;
         var wasQueued = _guardQueued; _guardQueued = false;
         var items = (cart && (cart.items || cart.products)) || [];
-        // Refresh _cart_pids cache
         try {
           var pids = [];
           for (var i = 0; i < items.length; i++) {
@@ -2906,30 +2927,15 @@ app.get("/widget/portal.js", (req, res) => {
           }
           localStorage.setItem('_cart_pids', JSON.stringify(pids));
         } catch(e) {}
-        // Re-read regItems in case it changed while waiting for Cart.get
-        var ri = {};
-        try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
-        if (Object.keys(ri).length === 0) { if (wasQueued) setTimeout(_guardCheckCart, 200); return; }
-        var hadConflict = false;
-        for (var j = items.length - 1; j >= 0; j--) {
-          var product = (items[j] && items[j].product) || items[j];
-          var pid = String((product && product.id) || items[j].productId || 0);
-          if (pid === '0') continue;
-          var tracked = ri[pid];
-          if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
-            Ecwid.Cart.removeProduct(j);
-            hadConflict = true;
-          }
-        }
-        if (hadConflict) _guardShowToast();
-        if (wasQueued) setTimeout(_guardCheckCart, 200);
+        _guardRemoveConflicts(items);
+        if (wasQueued) setTimeout(_guardCheckCartFull, 200);
       });
     }
 
     function _guardOnCartChanged(cart) {
-      // Update _cart_pids from the event payload immediately (no async needed)
+      var items = (cart && (cart.items || cart.products)) || [];
+      // Update _cart_pids cache from event payload — no Cart.get needed.
       try {
-        var items = (cart && (cart.items || cart.products)) || [];
         var pids = [];
         for (var i = 0; i < items.length; i++) {
           var p = (items[i] && items[i].product) || items[i];
@@ -2938,23 +2944,18 @@ app.get("/widget/portal.js", (req, res) => {
         }
         localStorage.setItem('_cart_pids', JSON.stringify(pids));
       } catch(e) {}
-      // Defer the actual removal so we're outside the OnCartChanged callback
-      // context — some Ecwid versions ignore removeProduct calls made inline.
-      setTimeout(_guardCheckCart, 150);
+      // Use event payload for conflict detection — no Cart.get, never blocks add-to-cart.
+      var snapshot = items.slice();
+      setTimeout(function(){ _guardRemoveConflicts(snapshot); }, 200);
     }
 
     function _guardSubscribe() {
       if (!window.Ecwid || !Ecwid.OnCartChanged || !Ecwid.OnCartChanged.add) return false;
       Ecwid.OnCartChanged.add(_guardOnCartChanged);
       if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
-        Ecwid.OnPageLoaded.add(function(){ setTimeout(_guardCheckCart, 400); });
+        // OnPageLoaded: user is navigating, not adding — Cart.get is safe here.
+        Ecwid.OnPageLoaded.add(function(){ setTimeout(_guardCheckCartFull, 1000); });
       }
-      // Slow poll as fallback — OnCartChanged doesn't fire for native Ecwid
-      // Add-to-Cart on product pages on Instant Sites. The in-flight debounce
-      // ensures only one Cart.get runs at a time, so this is safe.
-      setInterval(_guardCheckCart, 5000);
-      // Immediate check for items already in cart
-      setTimeout(_guardCheckCart, 500);
       return true;
     }
 
