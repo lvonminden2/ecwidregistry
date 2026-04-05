@@ -1930,6 +1930,10 @@ app.get("/widget/cart-guard.js", (req, res) => {
     if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
       Ecwid.OnPageLoaded.add(function(){ setTimeout(checkCart, 500); });
     }
+    // Slow poll as fallback — OnCartChanged doesn't fire for native Ecwid
+    // Add-to-Cart on product pages on Instant Sites. The in-flight debounce
+    // above ensures only one Cart.get runs at a time, so this is safe.
+    setInterval(checkCart, 5000);
     return true;
   }
   if (!subscribe()) {
@@ -3062,6 +3066,10 @@ app.get("/widget/portal.js", (req, res) => {
       if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
         Ecwid.OnPageLoaded.add(function(){ setTimeout(_guardCheckCart, 400); });
       }
+      // Slow poll as fallback — OnCartChanged doesn't fire for native Ecwid
+      // Add-to-Cart on product pages on Instant Sites. The in-flight debounce
+      // ensures only one Cart.get runs at a time, so this is safe.
+      setInterval(_guardCheckCart, 5000);
       // Immediate check for items already in cart
       setTimeout(_guardCheckCart, 500);
       return true;
