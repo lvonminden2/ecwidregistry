@@ -1880,8 +1880,8 @@ app.get("/widget/cart-guard.js", (req, res) => {
       _checkInFlight = false;
       var queued = _checkQueued; _checkQueued = false;
       var items = (cart && (cart.items || cart.products)) || [];
+      var pids = [];
       try {
-        var pids = [];
         for (var i = 0; i < items.length; i++) {
           var p = (items[i] && items[i].product) || items[i];
           var id = String((p && p.id) || items[i].productId || 0);
@@ -1889,16 +1889,43 @@ app.get("/widget/cart-guard.js", (req, res) => {
         }
         localStorage.setItem('_cart_pids', JSON.stringify(pids));
       } catch(e) {}
+      // Re-read _reg_items (may have changed while Cart.get was in flight)
       var ri = {};
       try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
       if (Object.keys(ri).length === 0) { if (queued) checkCart(); return; }
+      // ── Stale cleanup: remove _reg_items entries for products no longer in cart ──
+      var cartPidSet = {};
+      for (var ci = 0; ci < pids.length; ci++) { cartPidSet[pids[ci]] = true; }
+      var riChanged = false;
+      Object.keys(ri).forEach(function(pid) {
+        if (!cartPidSet[pid]) { delete ri[pid]; riChanged = true; }
+      });
+      if (riChanged) {
+        if (Object.keys(ri).length === 0) {
+          localStorage.removeItem('_reg_items');
+          if (queued) setTimeout(checkCart, 200);
+          return;
+        }
+        localStorage.setItem('_reg_items', JSON.stringify(ri));
+      }
+      // ── Single-registry enforcement: determine the primary registry ──────────
+      var ridSet = {};
+      Object.keys(ri).forEach(function(pid) {
+        var entries = ri[pid];
+        if (Array.isArray(entries)) { entries.forEach(function(e) { ridSet[e.rid] = true; }); }
+      });
+      var primaryRid = Object.keys(ridSet).length > 0 ? Number(Object.keys(ridSet)[0]) : null;
+      // ── Ejection loop: remove regular items and wrong-registry items ─────────
       var hadConflict = false;
       for (var j = items.length - 1; j >= 0; j--) {
         var product = (items[j] && items[j].product) || items[j];
         var pid = String((product && product.id) || items[j].productId || 0);
         if (pid === '0') continue;
         var tracked = ri[pid];
-        if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+        var isTracked = tracked && Array.isArray(tracked) && tracked.length > 0;
+        var isWrongRegistry = isTracked && primaryRid !== null &&
+          !tracked.some(function(e) { return e.rid === primaryRid; });
+        if (!isTracked || isWrongRegistry) {
           Ecwid.Cart.removeProduct(j);
           hadConflict = true;
         }
@@ -1910,9 +1937,9 @@ app.get("/widget/cart-guard.js", (req, res) => {
 
   function onCartChanged(cart) {
     // Update _cart_pids synchronously from the event payload (no Cart.get needed)
+    var pids = [];
     try {
       var items = (cart && (cart.items || cart.products)) || [];
-      var pids = [];
       for (var i = 0; i < items.length; i++) {
         var p = (items[i] && items[i].product) || items[i];
         var id = String((p && p.id) || items[i].productId || 0);
@@ -1920,6 +1947,12 @@ app.get("/widget/cart-guard.js", (req, res) => {
       }
       localStorage.setItem('_cart_pids', JSON.stringify(pids));
     } catch(e) {}
+    // End registry session immediately when cart is emptied
+    if (pids.length === 0) {
+      localStorage.removeItem('_reg_items');
+      localStorage.removeItem('_cart_pids');
+      return;
+    }
     // Defer the Cart.get check so we're outside the OnCartChanged context
     setTimeout(checkCart, 200);
   }
@@ -3010,8 +3043,8 @@ app.get("/widget/portal.js", (req, res) => {
         var wasQueued = _guardQueued; _guardQueued = false;
         var items = (cart && (cart.items || cart.products)) || [];
         // Refresh _cart_pids cache
+        var pids = [];
         try {
-          var pids = [];
           for (var i = 0; i < items.length; i++) {
             var p = (items[i] && items[i].product) || items[i];
             var id = String((p && p.id) || items[i].productId || 0);
@@ -3023,13 +3056,39 @@ app.get("/widget/portal.js", (req, res) => {
         var ri = {};
         try { ri = JSON.parse(localStorage.getItem('_reg_items') || '{}'); } catch(e) {}
         if (Object.keys(ri).length === 0) { if (wasQueued) setTimeout(_guardCheckCart, 200); return; }
+        // ── Stale cleanup: remove _reg_items entries for products no longer in cart ──
+        var cartPidSet = {};
+        for (var ci = 0; ci < pids.length; ci++) { cartPidSet[pids[ci]] = true; }
+        var riChanged = false;
+        Object.keys(ri).forEach(function(pid) {
+          if (!cartPidSet[pid]) { delete ri[pid]; riChanged = true; }
+        });
+        if (riChanged) {
+          if (Object.keys(ri).length === 0) {
+            localStorage.removeItem('_reg_items');
+            if (wasQueued) setTimeout(_guardCheckCart, 200);
+            return;
+          }
+          localStorage.setItem('_reg_items', JSON.stringify(ri));
+        }
+        // ── Single-registry enforcement: determine the primary registry ──────────
+        var ridSet = {};
+        Object.keys(ri).forEach(function(pid) {
+          var entries = ri[pid];
+          if (Array.isArray(entries)) { entries.forEach(function(e) { ridSet[e.rid] = true; }); }
+        });
+        var primaryRid = Object.keys(ridSet).length > 0 ? Number(Object.keys(ridSet)[0]) : null;
+        // ── Ejection loop: remove regular items and wrong-registry items ─────────
         var hadConflict = false;
         for (var j = items.length - 1; j >= 0; j--) {
           var product = (items[j] && items[j].product) || items[j];
           var pid = String((product && product.id) || items[j].productId || 0);
           if (pid === '0') continue;
           var tracked = ri[pid];
-          if (!tracked || (Array.isArray(tracked) && tracked.length === 0)) {
+          var isTracked = tracked && Array.isArray(tracked) && tracked.length > 0;
+          var isWrongRegistry = isTracked && primaryRid !== null &&
+            !tracked.some(function(e) { return e.rid === primaryRid; });
+          if (!isTracked || isWrongRegistry) {
             Ecwid.Cart.removeProduct(j);
             hadConflict = true;
           }
@@ -3041,9 +3100,9 @@ app.get("/widget/portal.js", (req, res) => {
 
     function _guardOnCartChanged(cart) {
       // Update _cart_pids from the event payload immediately (no async needed)
+      var pids = [];
       try {
         var items = (cart && (cart.items || cart.products)) || [];
-        var pids = [];
         for (var i = 0; i < items.length; i++) {
           var p = (items[i] && items[i].product) || items[i];
           var id = String((p && p.id) || items[i].productId || 0);
@@ -3051,6 +3110,12 @@ app.get("/widget/portal.js", (req, res) => {
         }
         localStorage.setItem('_cart_pids', JSON.stringify(pids));
       } catch(e) {}
+      // End registry session immediately when cart is emptied
+      if (pids.length === 0) {
+        localStorage.removeItem('_reg_items');
+        localStorage.removeItem('_cart_pids');
+        return;
+      }
       // Defer the actual removal so we're outside the OnCartChanged callback
       // context — some Ecwid versions ignore removeProduct calls made inline.
       setTimeout(_guardCheckCart, 150);
