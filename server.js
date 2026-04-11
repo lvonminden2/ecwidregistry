@@ -1827,15 +1827,10 @@ app.post("/admin/sync-orders", async (req, res) => {
 // Reads _reg_items from localStorage (written by registry.js when items are added).
 // Shows a Registry Summary Panel above the cart and passes registry data to checkout.
 // ── Global cart guard ──────────────────────────────────────────────────────
-// Tiny script the registry section injects once into the page. Persists
-// across SPA navigation so the guard runs even when the user is on a
-// regular product page, not the registry page.
-app.get("/widget/cart-guard.js", (req, res) => {
-  res.type("application/javascript");
-  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
-  res.set("Pragma", "no-cache");
-  res.send(`
-(function(){
+// Shared guard code: defined once as a server-side constant and inlined into
+// both /widget/cart-guard.js and /widget/portal.js so the guard is always
+// present with zero latency and no external script dependency.
+const CART_GUARD_CODE = `
   if (window.__regCartGuardInstalled) return;
   window.__regCartGuardInstalled = true;
 
@@ -2008,8 +2003,16 @@ app.get("/widget/cart-guard.js", (req, res) => {
   if (!subscribe()) {
     var _poll = setInterval(function(){ if (subscribe()) clearInterval(_poll); }, 500);
   }
-})();
-`);
+`;
+
+// Tiny script the registry section injects once into the page. Persists
+// across SPA navigation so the guard runs even when the user is on a
+// regular product page, not the registry page.
+app.get("/widget/cart-guard.js", (req, res) => {
+  res.type("application/javascript");
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.set("Pragma", "no-cache");
+  res.send(`(function(){${CART_GUARD_CODE}})();`);
 });
 
 // Usage: <script src="https://your-app/widget/cart.js"></script>
@@ -3061,16 +3064,11 @@ app.get("/widget/portal.js", (req, res) => {
   var _frameId = 'registry-portal-iframe';
   var _initDone = false;
 
-  // ── Registry cart guard (loaded from canonical cart-guard.js) ─────────────
+  // ── Registry cart guard (inlined from shared CART_GUARD_CODE constant) ────
   // portal.js is loaded on every storefront page via Settings > Custom JS.
-  // Instead of inlining the guard logic, we load cart-guard.js so there is a
-  // single source of truth for the guard code.
-  if (!window.__regCartGuardInstalled && !document.querySelector('script[data-registry-guard]')) {
-    var _guardScript = document.createElement('script');
-    _guardScript.setAttribute('data-registry-guard', '1');
-    _guardScript.src = baseUrl + '/widget/cart-guard.js';
-    document.head.appendChild(_guardScript);
-  }
+  // The guard is inlined (not loaded externally) so it activates immediately
+  // with zero latency and no extra network request that could fail.
+  ${CART_GUARD_CODE}
 
   // All Ecwid page types that constitute "the account section"
   var _acctPages = ['ACCOUNT_SETTINGS','MY_ORDERS','ADDRESS_BOOK','FAVORITES',
