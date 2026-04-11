@@ -315,17 +315,48 @@ function detectCartConflict(newRegistryId: number): Promise<{ message: string } 
     return Promise.resolve({ message: `Your cart has items from "${existingRegName}".` });
   }
 
-  // Step 2: Check _cart_pids cache for regular (non-registry) items (synchronous)
-  let cachedPids: string[] = [];
-  try { cachedPids = JSON.parse(localStorage.getItem('_cart_pids') ?? '[]'); } catch { /* ignore */ }
-  for (const pid of cachedPids) {
-    if (pid === '0') continue;
-    const tracked = regItems[pid];
-    if (!tracked || tracked.length === 0) {
-      return Promise.resolve({ message: 'Your cart contains items from regular shopping.' });
+  // Step 2: Call Cart.get for canonical cart state (NOT _cart_pids cache)
+  // This ensures we always have fresh data, even on first page load or when
+  // OnCartChanged hasn't fired yet (known Ecwid Instant Sites issue).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as Record<string, any>;
+  if (!w.Ecwid?.Cart?.get) {
+    // Cart API unavailable — fall back to _cart_pids cache as best-effort
+    let cachedPids: string[] = [];
+    try { cachedPids = JSON.parse(localStorage.getItem('_cart_pids') ?? '[]'); } catch { /* ignore */ }
+    for (const pid of cachedPids) {
+      if (pid === '0') continue;
+      const tracked = regItems[pid];
+      if (!tracked || tracked.length === 0) {
+        return { message: 'Your cart contains items from regular shopping.' };
+      }
     }
+    return null;
   }
-  return Promise.resolve(null);
+  return new Promise<{ message: string } | null>((resolve) => {
+    const timeout = setTimeout(() => resolve(null), 1500);
+    w.Ecwid.Cart.get((cart: { items?: unknown[]; products?: unknown[] }) => {
+      clearTimeout(timeout);
+      const raw = (cart?.items ?? (cart as any)?.products ?? []) as Array<Record<string, unknown>>;
+      const freshPids = raw.map((item) => {
+        const product = (item.product as Record<string, unknown>) ?? item;
+        return String((product.id as number) ?? (item.productId as number) ?? 0);
+      }).filter((pid) => pid !== '0');
+      // Refresh _cart_pids cache while we have fresh data
+      try { localStorage.setItem('_cart_pids', JSON.stringify(freshPids)); } catch { /* ignore */ }
+      // Re-read regItems (may have changed while waiting for Cart.get)
+      let ri: Record<string, Array<{ rid: number }>> = {};
+      try { ri = JSON.parse(localStorage.getItem('_reg_items') ?? '{}'); } catch { /* ignore */ }
+      for (const pid of freshPids) {
+        const tracked = ri[pid];
+        if (!tracked || tracked.length === 0) {
+          resolve({ message: 'Your cart contains items from regular shopping.' });
+          return;
+        }
+      }
+      resolve(null);
+    });
+  });
 }
 
 function clearCart(): Promise<void> {
