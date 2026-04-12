@@ -1849,12 +1849,15 @@ app.post("/admin/sync-orders", async (req, res) => {
 const CART_GUARD_CODE = `
   if (window.__regCartGuardInstalled) return;
   window.__regCartGuardInstalled = true;
-  console.log('[registry-guard] v4 installed on ' + location.pathname);
+  console.log('[registry-guard] v5 installed on ' + location.pathname);
 
-  function showGuardToast() {
+  function showGuardToast(ejected) {
     // Match the Cart Conflict modal styling used on the registry page
     // (.gr-conflict-overlay / .gr-conflict-modal in Section.vue) so the
     // user experience is consistent wherever the conflict is detected.
+    // 'ejected' is an array of { id, quantity } for items that were just
+    // removed — Clear Cart and Add re-adds them after emptying the cart.
+    ejected = ejected || [];
     var existing = document.getElementById('reg-guard-overlay');
     if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 
@@ -1902,16 +1905,27 @@ const CART_GUARD_CODE = `
       'background:#e53e3e', 'color:#fff', 'cursor:pointer',
       'font-size:14px', 'font-family:inherit'
     ].join(';'));
-    clearBtn.textContent = 'Clear Cart';
+    clearBtn.textContent = ejected.length > 0 ? 'Clear Cart and Add' : 'Clear Cart';
     clearBtn.onmouseover = function(){ clearBtn.style.background = '#c53030'; };
     clearBtn.onmouseout  = function(){ clearBtn.style.background = '#e53e3e'; };
     clearBtn.onclick = function(){
+      // Clear registry tracking first so the guard's 2s poll won't re-eject
+      // the re-added product while it's still being processed by Ecwid.
       localStorage.removeItem('_reg_items');
       localStorage.removeItem('_cart_pids');
       if (window.Ecwid && Ecwid.Cart && typeof Ecwid.Cart.get === 'function') {
         Ecwid.Cart.get(function(cart) {
           var items = (cart && cart.items) || [];
           for (var i = items.length - 1; i >= 0; i--) Ecwid.Cart.removeProduct(i);
+          // Re-add the ejected items after a short delay so Ecwid has time
+          // to process the removals before we push new products in.
+          if (ejected.length > 0 && typeof Ecwid.Cart.addProduct === 'function') {
+            setTimeout(function(){
+              ejected.forEach(function(item) {
+                try { Ecwid.Cart.addProduct({ id: item.id, quantity: item.quantity || 1 }); } catch(e) {}
+              });
+            }, 400);
+          }
         });
       }
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
@@ -1980,7 +1994,7 @@ const CART_GUARD_CODE = `
       });
       var primaryRid = Object.keys(ridSet).length > 0 ? Number(Object.keys(ridSet)[0]) : null;
       // ── Ejection loop: remove regular items and wrong-registry items ─────────
-      var hadConflict = false;
+      var ejected = [];
       for (var j = items.length - 1; j >= 0; j--) {
         var product = (items[j] && items[j].product) || items[j];
         var pid = String((product && product.id) || items[j].productId || 0);
@@ -1991,11 +2005,12 @@ const CART_GUARD_CODE = `
           !tracked.some(function(e) { return e.rid === primaryRid; });
         if (!isTracked || isWrongRegistry) {
           console.log('[registry-guard] ejecting product ' + pid + ' (isTracked=' + isTracked + ', wrongRegistry=' + isWrongRegistry + ')');
+          var qty = Number((items[j] && items[j].quantity) || (product && product.quantity) || 1);
+          ejected.push({ id: Number(pid), quantity: qty });
           Ecwid.Cart.removeProduct(j);
-          hadConflict = true;
         }
       }
-      if (hadConflict) showGuardToast();
+      if (ejected.length > 0) showGuardToast(ejected);
       if (queued) setTimeout(checkCart, 200);
     });
   }
@@ -2077,7 +2092,7 @@ app.get("/widget/cart.js", (req, res) => {
   res.set("Pragma", "no-cache");
   res.send(`
 (function(){
-  console.log('[registry-cart] v10 loaded');
+  console.log('[registry-cart] v11 loaded');
 
   // ── Registry cart guard (inlined from shared CART_GUARD_CODE constant) ────
   // Also inlined here so merchants who registered cart.js as their app's
