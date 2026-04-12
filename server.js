@@ -1849,6 +1849,7 @@ app.post("/admin/sync-orders", async (req, res) => {
 const CART_GUARD_CODE = `
   if (window.__regCartGuardInstalled) return;
   window.__regCartGuardInstalled = true;
+  console.log('[registry-guard] v3 installed on ' + location.pathname);
 
   function showGuardToast() {
     var existing = document.getElementById('reg-guard-toast');
@@ -1953,6 +1954,7 @@ const CART_GUARD_CODE = `
         var isWrongRegistry = isTracked && primaryRid !== null &&
           !tracked.some(function(e) { return e.rid === primaryRid; });
         if (!isTracked || isWrongRegistry) {
+          console.log('[registry-guard] ejecting product ' + pid + ' (isTracked=' + isTracked + ', wrongRegistry=' + isWrongRegistry + ')');
           Ecwid.Cart.removeProduct(j);
           hadConflict = true;
         }
@@ -1986,6 +1988,7 @@ const CART_GUARD_CODE = `
 
   function subscribe() {
     if (!window.Ecwid || !Ecwid.OnCartChanged || !Ecwid.OnCartChanged.add) return false;
+    console.log('[registry-guard] Ecwid API ready — subscribing to OnCartChanged + 2s poll');
     Ecwid.OnCartChanged.add(onCartChanged);
     if (Ecwid.OnPageLoaded && Ecwid.OnPageLoaded.add) {
       Ecwid.OnPageLoaded.add(function(){ setTimeout(checkCart, 500); });
