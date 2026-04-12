@@ -2041,7 +2041,14 @@ app.get("/widget/cart.js", (req, res) => {
   res.set("Pragma", "no-cache");
   res.send(`
 (function(){
-  console.log('[registry-cart] v8 loaded');
+  console.log('[registry-cart] v9 loaded');
+
+  // ── Registry cart guard (inlined from shared CART_GUARD_CODE constant) ────
+  // Also inlined here so merchants who registered cart.js as their app's
+  // customJsUrl still get the full guard without having to switch URLs.
+  // The __regCartGuardInstalled flag ensures it only runs once per page even
+  // if both cart.js and portal.js are loaded.
+  ${CART_GUARD_CODE}
 
   // ── HTML escaper ──
   function esc(s) {
