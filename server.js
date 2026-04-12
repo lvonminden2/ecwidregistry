@@ -519,61 +519,22 @@ async function fetchEcwidProductBySku(sku, storeId, accessToken) {
   return { product: null, error: "No Ecwid product found for that SKU." };
 }
 
-// ── Auto-inject storefront scripts via Ecwid Instant Site API ───────────────
-// When a store installs the app, we automatically add portal.js (which includes
-// the cart guard) and cart.js to the store's Instant Site custom JavaScript.
-// This ensures the guard runs on ALL storefront pages without the merchant
-// having to manually add script tags in their Ecwid settings.
-async function ensureStorefrontScripts(storeId, accessToken) {
-  if (!accessToken || !storeId || !BASE_URL) return;
-  const portalTag = `<script src="${BASE_URL}/widget/portal.js"></script>`;
-  const cartTag   = `<script src="${BASE_URL}/widget/cart.js"></script>`;
-  const url = `https://app.ecwid.com/api/v3/${storeId}/startersite`;
-  try {
-    // 1. Fetch current Instant Site settings
-    const getRes = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
-    if (!getRes.ok) {
-      console.log(`[storefront-scripts] GET startersite failed status=${getRes.status}`);
-      return;
-    }
-    const data = await getRes.json();
-    const currentJs = data.customJavascript || "";
-
-    // 2. Check which scripts are already present
-    const hasPortal = currentJs.includes("/widget/portal.js");
-    const hasCart    = currentJs.includes("/widget/cart.js");
-    if (hasPortal && hasCart) {
-      console.log(`[storefront-scripts] store ${storeId} already has both scripts`);
-      return;
-    }
-
-    // 3. Append missing script tags
-    let updatedJs = currentJs;
-    if (!hasPortal) updatedJs += (updatedJs ? "\n" : "") + portalTag;
-    if (!hasCart)   updatedJs += (updatedJs ? "\n" : "") + cartTag;
-
-    // 4. Update the Instant Site custom JavaScript
-    const putRes = await fetch(url, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ customJavascript: updatedJs })
-    });
-    if (putRes.ok) {
-      console.log(`[storefront-scripts] store ${storeId} scripts injected successfully`);
-    } else {
-      const body = await putRes.text();
-      console.log(`[storefront-scripts] PUT startersite failed status=${putRes.status} body=${body}`);
-    }
-  } catch (err) {
-    console.log(`[storefront-scripts] error: ${err.message}`);
-  }
-}
-
+// ── Storefront script loading (Ecwid App Market configuration) ──────────────
+// For this App Market app, storefront scripts (portal.js, cart.js) are loaded
+// on every storefront automatically by Ecwid via the app's registered
+// customJsUrl. This is configured ONCE in the Ecwid Developer Dashboard:
+//
+//   Ecwid Developer Dashboard → Your Apps → (this app) → Storefront tab
+//   → Custom JavaScript URL: https://<your-app-domain>/widget/portal.js
+//
+// Per Ecwid's docs, the customJsUrl cannot be set via REST API — it is an
+// app-level setting that Ecwid configures for all stores that install the app.
+// Ensure the app's `customize_storefront` scope is requested at install time.
+//
+// For local development / testing on a single store, the merchant can paste
+// the tag manually into Ecwid Admin → Settings → Design → Custom JavaScript:
+//   <script src="${BASE_URL}/widget/portal.js"></script>
+//
 // ── Registrant portal auth middleware ─────────────────────────────────────────
 function requireRegistrant(req, res, next) {
   if (!req.session.registrantId) return res.redirect("/portal/login");
@@ -691,9 +652,6 @@ app.get("/ecwid/iframe", (req, res) => {
       console.log(`[ecwid-iframe] store ${storeId} credentials saved`);
       // Trigger crane deploy if it hasn't run yet — pass storeId directly
       deployCraneSection(storeId);
-      // Auto-inject portal.js + cart.js into the store's Instant Site so the
-      // cart guard and registry summary run on ALL storefront pages out of the box.
-      ensureStorefrontScripts(storeId, accessToken);
     }
   } else if (payload) {
     console.log("[ecwid-iframe] no ECWID_CLIENT_SECRET — skipping payload verification");
