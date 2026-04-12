@@ -1849,28 +1849,62 @@ app.post("/admin/sync-orders", async (req, res) => {
 const CART_GUARD_CODE = `
   if (window.__regCartGuardInstalled) return;
   window.__regCartGuardInstalled = true;
-  console.log('[registry-guard] v3 installed on ' + location.pathname);
+  console.log('[registry-guard] v4 installed on ' + location.pathname);
 
   function showGuardToast() {
-    var existing = document.getElementById('reg-guard-toast');
-    if (existing) { clearTimeout(existing._timer); existing.parentNode && existing.parentNode.removeChild(existing); }
-    var toast = document.createElement('div');
-    toast.id = 'reg-guard-toast';
-    toast.setAttribute('style', [
-      'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
-      'background:#1a1a1a', 'color:#fff', 'padding:14px 20px 14px 16px',
-      'border-radius:8px', 'font-family:inherit', 'font-size:14px',
-      'z-index:2147483647', 'box-shadow:0 4px 20px rgba(0,0,0,0.35)',
-      'max-width:480px', 'width:calc(100% - 48px)', 'text-align:center',
-      'display:flex', 'align-items:center', 'gap:12px', 'flex-wrap:wrap'
+    // Match the Cart Conflict modal styling used on the registry page
+    // (.gr-conflict-overlay / .gr-conflict-modal in Section.vue) so the
+    // user experience is consistent wherever the conflict is detected.
+    var existing = document.getElementById('reg-guard-overlay');
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+
+    var overlay = document.createElement('div');
+    overlay.id = 'reg-guard-overlay';
+    overlay.setAttribute('style', [
+      'position:fixed', 'inset:0', 'background:rgba(0,0,0,0.5)',
+      'z-index:2147483647', 'display:flex',
+      'align-items:center', 'justify-content:center'
     ].join(';'));
-    var msg = document.createElement('span');
-    msg.style.flex = '1';
-    msg.style.minWidth = '200px';
-    msg.textContent = 'Regular items cannot be mixed with registry items.';
+
+    var modal = document.createElement('div');
+    modal.setAttribute('style', [
+      'background:#fff', 'border-radius:8px', 'padding:28px 32px',
+      'max-width:420px', 'width:90%', 'box-shadow:0 4px 24px rgba(0,0,0,0.18)',
+      'color:#333', 'font-family:inherit', 'box-sizing:border-box'
+    ].join(';'));
+
+    var title = document.createElement('div');
+    title.setAttribute('style', 'font-size:18px;font-weight:700;margin-bottom:12px;');
+    title.textContent = '\\u26A0 Cart Conflict';
+
+    var msg = document.createElement('div');
+    msg.setAttribute('style', 'font-size:14px;color:#444;margin-bottom:20px;line-height:1.5;');
+    msg.textContent = 'Regular items cannot be mixed with registry items. The regular items have been removed from your cart.';
+
+    var actions = document.createElement('div');
+    actions.setAttribute('style', 'display:flex;gap:10px;justify-content:flex-end;');
+
+    var keepBtn = document.createElement('button');
+    keepBtn.setAttribute('style', [
+      'padding:8px 16px', 'border:1px solid #ccc', 'border-radius:4px',
+      'background:#fff', 'cursor:pointer', 'font-size:14px', 'font-family:inherit'
+    ].join(';'));
+    keepBtn.textContent = 'Dismiss';
+    keepBtn.onmouseover = function(){ keepBtn.style.background = '#f5f5f5'; };
+    keepBtn.onmouseout  = function(){ keepBtn.style.background = '#fff'; };
+    keepBtn.onclick = function(){
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    };
+
     var clearBtn = document.createElement('button');
-    clearBtn.setAttribute('style', 'background:#e53e3e;border:none;color:#fff;cursor:pointer;font-size:13px;padding:6px 14px;border-radius:4px;white-space:nowrap;');
+    clearBtn.setAttribute('style', [
+      'padding:8px 16px', 'border:none', 'border-radius:4px',
+      'background:#e53e3e', 'color:#fff', 'cursor:pointer',
+      'font-size:14px', 'font-family:inherit'
+    ].join(';'));
     clearBtn.textContent = 'Clear Cart';
+    clearBtn.onmouseover = function(){ clearBtn.style.background = '#c53030'; };
+    clearBtn.onmouseout  = function(){ clearBtn.style.background = '#e53e3e'; };
     clearBtn.onclick = function(){
       localStorage.removeItem('_reg_items');
       localStorage.removeItem('_cart_pids');
@@ -1880,17 +1914,19 @@ const CART_GUARD_CODE = `
           for (var i = items.length - 1; i >= 0; i--) Ecwid.Cart.removeProduct(i);
         });
       }
-      toast.parentNode && toast.parentNode.removeChild(toast);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
     };
-    var close = document.createElement('button');
-    close.setAttribute('style', 'background:none;border:none;color:#aaa;cursor:pointer;font-size:18px;line-height:1;padding:0;flex-shrink:0;');
-    close.textContent = '\\u00d7';
-    close.onclick = function(){ toast.parentNode && toast.parentNode.removeChild(toast); };
-    toast.appendChild(msg);
-    toast.appendChild(clearBtn);
-    toast.appendChild(close);
-    document.body.appendChild(toast);
-    toast._timer = setTimeout(function(){ toast.parentNode && toast.parentNode.removeChild(toast); }, 8000);
+
+    actions.appendChild(keepBtn);
+    actions.appendChild(clearBtn);
+    modal.appendChild(title);
+    modal.appendChild(msg);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    overlay.addEventListener('click', function(e){
+      if (e.target === overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    });
+    document.body.appendChild(overlay);
   }
 
   // Only one Cart.get allowed in-flight at a time to avoid locking the cart API.
@@ -2041,7 +2077,7 @@ app.get("/widget/cart.js", (req, res) => {
   res.set("Pragma", "no-cache");
   res.send(`
 (function(){
-  console.log('[registry-cart] v9 loaded');
+  console.log('[registry-cart] v10 loaded');
 
   // ── Registry cart guard (inlined from shared CART_GUARD_CODE constant) ────
   // Also inlined here so merchants who registered cart.js as their app's
