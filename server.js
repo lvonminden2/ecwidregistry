@@ -766,6 +766,24 @@ app.get("/admin/registry/:id", async (req, res) => {
   if (!registry) return res.status(404).send("Not found");
   const items = getRegistryItems(registryId);
   const purchases = getRegistryPurchases(registryId);
+
+  // Backfill missing prices (and thumbnails) from Ecwid
+  const needsBackfill = items.filter(item => item.product_id && item.unit_price == null);
+  if (needsBackfill.length > 0) {
+    const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
+    await Promise.all(needsBackfill.map(async (item) => {
+      const product = await fetchEcwidProduct(item.product_id, creds.storeId, creds.accessToken);
+      if (!product) return;
+      const updates = {};
+      if (!item.product_thumbnail && product.thumbnailUrl) updates.product_thumbnail = product.thumbnailUrl;
+      if (item.unit_price == null && product.price != null) updates.unit_price = Number(product.price);
+      if (Object.keys(updates).length === 0) return;
+      const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(", ");
+      db.prepare(`UPDATE registry_item SET ${setClauses} WHERE id = ?`)
+        .run(...Object.values(updates), item.id);
+      Object.assign(item, updates);
+    }));
+  }
   const skuSearch = String(req.query.sku || "").trim();
   const actionError = String(req.query.error || "").trim();
   const actionInfo = String(req.query.info || "").trim();
@@ -1441,21 +1459,24 @@ app.get("/api/registries/:id", async (req, res) => {
   if (!registry || registry.status !== "active") return res.status(404).json({ error: "Not found" });
   const items = getRegistryItems(registryId);
 
-  // Backfill thumbnails for items added before the product_thumbnail column existed
-  const missingThumb = items.filter(item => !item.product_thumbnail && item.product_id);
-  if (missingThumb.length > 0) {
+  // Backfill thumbnail and/or price from Ecwid for items that are missing either
+  const needsBackfill = items.filter(item => item.product_id && (!item.product_thumbnail || item.unit_price == null));
+  if (needsBackfill.length > 0) {
     const creds = resolveStoreCredentials(registry.store_id);
-    await Promise.all(missingThumb.map(async (item) => {
+    await Promise.all(needsBackfill.map(async (item) => {
       const product = await fetchEcwidProduct(item.product_id, creds.storeId, creds.accessToken);
-      if (product?.thumbnailUrl) {
-        db.prepare("UPDATE registry_item SET product_thumbnail = ? WHERE id = ?")
-          .run(product.thumbnailUrl, item.id);
-        item.product_thumbnail = product.thumbnailUrl;
-      }
+      if (!product) return;
+      const updates = {};
+      if (!item.product_thumbnail && product.thumbnailUrl) updates.product_thumbnail = product.thumbnailUrl;
+      if (item.unit_price == null && product.price != null) updates.unit_price = Number(product.price);
+      if (Object.keys(updates).length === 0) return;
+      const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(", ");
+      db.prepare(`UPDATE registry_item SET ${setClauses} WHERE id = ?`)
+        .run(...Object.values(updates), item.id);
+      Object.assign(item, updates);
     }));
   }
 
-  // registry_type is already on the registry row from getRegistryById
   res.json({ registry, items });
 });
 
