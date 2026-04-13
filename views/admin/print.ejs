@@ -179,6 +179,7 @@
       <div class="options-checks">
         <label><input type="checkbox" id="col-sku" checked /> SKU</label>
         <label><input type="checkbox" id="col-supplier" checked /> Supplier</label>
+        <label><input type="checkbox" id="col-price" checked /> Price</label>
         <label><input type="checkbox" id="col-desired" checked /> Desired</label>
         <label><input type="checkbox" id="col-purchased" checked /> Purchased</label>
         <label><input type="checkbox" id="col-needed" checked /> Still Needed</label>
@@ -204,6 +205,7 @@
       <th id="th-name">Item</th>
       <th id="th-sku">SKU</th>
       <th id="th-supplier">Supplier</th>
+      <th id="th-price" class="num">Price</th>
       <th id="th-desired" class="num">Desired</th>
       <th id="th-purchased" class="num">Purchased</th>
       <th id="th-needed" class="num">Still Needed</th>
@@ -220,6 +222,7 @@ var RAW_ITEMS = <%- JSON.stringify(items.map(function(i) {
     name: i.product_name || 'Registry item',
     sku: i.product_sku || '',
     supplier: i.supplier || '',
+    price: i.unit_price != null ? Number(i.unit_price).toFixed(2) : '',
     desired: i.desired_qty,
     purchased: i.purchased_qty,
     still_needed: i.still_needed
@@ -229,9 +232,10 @@ var RAW_ITEMS = <%- JSON.stringify(items.map(function(i) {
 var COLS = {
   sku:       { el: null, th: 'th-sku',       index: 1 },
   supplier:  { el: null, th: 'th-supplier',  index: 2 },
-  desired:   { el: null, th: 'th-desired',   index: 3 },
-  purchased: { el: null, th: 'th-purchased', index: 4 },
-  needed:    { el: null, th: 'th-needed',    index: 5 }
+  price:     { el: null, th: 'th-price',     index: 3 },
+  desired:   { el: null, th: 'th-desired',   index: 4 },
+  purchased: { el: null, th: 'th-purchased', index: 5 },
+  needed:    { el: null, th: 'th-needed',    index: 6 }
 };
 
 function getItems() {
@@ -257,6 +261,7 @@ function render() {
   var items = getItems();
   var showSku      = isColOn('sku');
   var showSupplier = isColOn('supplier');
+  var showPrice    = isColOn('price');
   var showDesired  = isColOn('desired');
   var showPurchased= isColOn('purchased');
   var showNeeded   = isColOn('needed');
@@ -264,17 +269,19 @@ function render() {
   // Header columns
   document.getElementById('th-sku').style.display       = showSku       ? '' : 'none';
   document.getElementById('th-supplier').style.display  = showSupplier  ? '' : 'none';
+  document.getElementById('th-price').style.display     = showPrice     ? '' : 'none';
   document.getElementById('th-desired').style.display   = showDesired   ? '' : 'none';
   document.getElementById('th-purchased').style.display = showPurchased ? '' : 'none';
   document.getElementById('th-needed').style.display    = showNeeded    ? '' : 'none';
 
   var rows = items.length === 0
-    ? '<tr><td colspan="6" style="color:#555;padding:20px 10px">No items on this registry yet.</td></tr>'
+    ? '<tr><td colspan="7" style="color:#555;padding:20px 10px">No items on this registry yet.</td></tr>'
     : items.map(function(item) {
         return '<tr>' +
           '<td class="item-name">' + esc(item.name) + '</td>' +
           (showSku       ? '<td>' + esc(item.sku) + '</td>' : '') +
           (showSupplier  ? '<td>' + esc(item.supplier) + '</td>' : '') +
+          (showPrice     ? '<td class="num">' + (item.price ? '$' + item.price : '') + '</td>' : '') +
           (showDesired   ? '<td class="num">' + item.desired + '</td>' : '') +
           (showPurchased ? '<td class="num">' + item.purchased + '</td>' : '') +
           (showNeeded    ? '<td class="num">' + item.still_needed + '</td>' : '') +
@@ -290,7 +297,7 @@ function render() {
 }
 
 // Wire up controls
-['col-sku','col-supplier','col-desired','col-purchased','col-needed'].forEach(function(id) {
+['col-sku','col-supplier','col-price','col-desired','col-purchased','col-needed'].forEach(function(id) {
   document.getElementById(id).addEventListener('change', render);
 });
 document.getElementById('sort-select').addEventListener('change', render);

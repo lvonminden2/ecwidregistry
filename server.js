@@ -766,6 +766,24 @@ app.get("/admin/registry/:id", async (req, res) => {
   if (!registry) return res.status(404).send("Not found");
   const items = getRegistryItems(registryId);
   const purchases = getRegistryPurchases(registryId);
+
+  // Backfill missing prices (and thumbnails) from Ecwid
+  const needsBackfill = items.filter(item => item.product_id && item.unit_price == null);
+  if (needsBackfill.length > 0) {
+    const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
+    await Promise.all(needsBackfill.map(async (item) => {
+      const product = await fetchEcwidProduct(item.product_id, creds.storeId, creds.accessToken);
+      if (!product) return;
+      const updates = {};
+      if (!item.product_thumbnail && product.thumbnailUrl) updates.product_thumbnail = product.thumbnailUrl;
+      if (item.unit_price == null && product.price != null) updates.unit_price = Number(product.price);
+      if (Object.keys(updates).length === 0) return;
+      const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(", ");
+      db.prepare(`UPDATE registry_item SET ${setClauses} WHERE id = ?`)
+        .run(...Object.values(updates), item.id);
+      Object.assign(item, updates);
+    }));
+  }
   const skuSearch = String(req.query.sku || "").trim();
   const actionError = String(req.query.error || "").trim();
   const actionInfo = String(req.query.info || "").trim();
@@ -1441,22 +1459,86 @@ app.get("/api/registries/:id", async (req, res) => {
   if (!registry || registry.status !== "active") return res.status(404).json({ error: "Not found" });
   const items = getRegistryItems(registryId);
 
-  // Backfill thumbnails for items added before the product_thumbnail column existed
-  const missingThumb = items.filter(item => !item.product_thumbnail && item.product_id);
-  if (missingThumb.length > 0) {
+  // Backfill thumbnail and/or price from Ecwid for items that are missing either
+  const needsBackfill = items.filter(item => item.product_id && (!item.product_thumbnail || item.unit_price == null));
+  if (needsBackfill.length > 0) {
     const creds = resolveStoreCredentials(registry.store_id);
-    await Promise.all(missingThumb.map(async (item) => {
+    await Promise.all(needsBackfill.map(async (item) => {
       const product = await fetchEcwidProduct(item.product_id, creds.storeId, creds.accessToken);
-      if (product?.thumbnailUrl) {
-        db.prepare("UPDATE registry_item SET product_thumbnail = ? WHERE id = ?")
-          .run(product.thumbnailUrl, item.id);
-        item.product_thumbnail = product.thumbnailUrl;
-      }
+      if (!product) return;
+      const updates = {};
+      if (!item.product_thumbnail && product.thumbnailUrl) updates.product_thumbnail = product.thumbnailUrl;
+      if (item.unit_price == null && product.price != null) updates.unit_price = Number(product.price);
+      if (Object.keys(updates).length === 0) return;
+      const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(", ");
+      db.prepare(`UPDATE registry_item SET ${setClauses} WHERE id = ?`)
+        .run(...Object.values(updates), item.id);
+      Object.assign(item, updates);
     }));
   }
 
-  // registry_type is already on the registry row from getRegistryById
   res.json({ registry, items });
+});
+
+// Generate a single-use Ecwid discount coupon to honour registry-exclusive pricing.
+// Called by the storefront widget just before adding a priced item to cart.
+app.post("/api/registry-price-coupon", express.json(), async (req, res) => {
+  const registryId = Number(req.body?.registry_id || 0);
+  const productId  = Number(req.body?.product_id  || 0);
+  if (!registryId || !productId) return res.status(400).json({ error: "Missing parameters" });
+
+  const registry = db.prepare("SELECT * FROM registry WHERE id = ? AND status = 'active'").get(registryId);
+  if (!registry) return res.status(404).json({ error: "Registry not found" });
+
+  const item = db.prepare("SELECT unit_price FROM registry_item WHERE registry_id = ? AND product_id = ?").get(registryId, productId);
+  if (!item || item.unit_price == null) return res.json({ coupon: null });
+
+  const registryPrice = Number(item.unit_price);
+  const creds = resolveStoreCredentials(registry.store_id);
+  if (!creds.accessToken) return res.json({ coupon: null });
+
+  // Fetch the current Ecwid catalog price so we know how much to discount
+  const product = await fetchEcwidProduct(productId, creds.storeId, creds.accessToken);
+  const catalogPrice = product ? Number(product.price || product.defaultDisplayedPrice || 0) : 0;
+
+  // No coupon needed when registry price is at or above catalog price
+  if (!catalogPrice || registryPrice >= catalogPrice) return res.json({ coupon: null, registryPrice });
+
+  const discount = Math.round((catalogPrice - registryPrice) * 100) / 100;
+  const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2-hour window
+  const expiryDate = expiresAt.toISOString().split("T")[0]; // YYYY-MM-DD
+  const couponCode = "REG" + registryId + "P" + productId + "T" + Date.now();
+
+  try {
+    const createRes = await fetch(
+      `https://app.ecwid.com/api/v3/${creds.storeId}/discount_coupons`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${creds.accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `Registry Price — ${registry.display_name}`,
+          code: couponCode,
+          discountType: "ABS",
+          status: "ACTIVE",
+          discount,
+          limitTotalUses: true,
+          totalUsesLimit: 1,
+          products: [productId],
+          expirationDate: expiryDate,
+        }),
+      }
+    );
+    if (!createRes.ok) {
+      const errText = await createRes.text().catch(() => "");
+      console.log(`[coupon] create failed ${createRes.status}: ${errText}`);
+      return res.json({ coupon: null });
+    }
+    console.log(`[coupon] created ${couponCode} — $${discount} off product ${productId} for registry ${registryId}`);
+    return res.json({ coupon: couponCode, discount, registryPrice });
+  } catch (err) {
+    console.log(`[coupon] error: ${err.message}`);
+    return res.json({ coupon: null });
+  }
 });
 
 // ─── Process a full Ecwid order: match items to registries, record purchases,
@@ -3036,7 +3118,7 @@ app.get("/widget/registry.js", (req, res) => {
         const unitPrice = item.unit_price != null ? Number(item.unit_price) : null;
         const priceAttr = unitPrice != null ? ' data-unit-price="' + unitPrice + '"' : '';
         const priceHtml = unitPrice != null
-          ? '<div class="reg-item-registry-price">Registry price: $' + unitPrice.toFixed(2) + '</div>'
+          ? '<div class="reg-item-registry-price">$' + unitPrice.toFixed(2) + '</div>'
           : '';
         const action = stillNeeded > 0
           ? '<button class="reg-btn" data-product-id="' + item.product_id + '"' + priceAttr + '>Add to cart</button>'
@@ -3160,42 +3242,61 @@ app.get("/widget/registry.js", (req, res) => {
                 }
                 try { if (window.Ecwid && Ecwid.OnCartChanged) Ecwid.OnCartChanged.add(_onCartChanged); } catch(e){}
 
-                // Fire addProduct — use the modern object form so the callback
-                // is reliably invoked; also handle if it returns a Promise.
-                // If the registry item has a custom unit_price, pass it so the
-                // shopper gets registry-exclusive pricing at checkout.
-                console.log('[registry] adding product', productId, registryPrice != null ? '@ $' + registryPrice : '');
-                const addPayload = { id: productId, quantity: 1 };
-                if (registryPrice != null && !isNaN(registryPrice)) addPayload.price = registryPrice;
-                try {
-                  const addResult = Ecwid.Cart.addProduct(
-                    addPayload,
-                    function(success){
-                      console.log('[registry] addProduct callback:', success);
-                      finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
-                    }
-                  );
-                  // Newer Ecwid versions return a Promise — handle it too
-                  if (addResult && typeof addResult.then === 'function') {
-                    addResult.then(function(){
-                      finish(true, 'Added to cart.');
-                    }).catch(function(){
-                      finish(false, 'Failed to add to cart.');
-                    });
-                  }
-                } catch (err) {
-                  console.log('[registry] addProduct error:', err);
-                  untrackRegItem(productId, registry.id);
-                  finish(false, 'Failed to add to cart.');
-                }
-
-                // Fallback: assume success after 2s (item was likely added)
+                // Fallback: assume success after 3s if no callback fires
                 setTimeout(function(){
                   if (!settled) {
                     console.log('[registry] callback never fired, assuming success');
                     finish(true, 'Added to cart.');
                   }
-                }, 2000);
+                }, 3000);
+
+                function doAdd() {
+                  console.log('[registry] addProduct', productId);
+                  var addPayload = { id: productId, quantity: 1 };
+                  try {
+                    var addResult = Ecwid.Cart.addProduct(
+                      addPayload,
+                      function(success){
+                        console.log('[registry] addProduct callback:', success);
+                        finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
+                      }
+                    );
+                    // Newer Ecwid versions return a Promise — handle it too
+                    if (addResult && typeof addResult.then === 'function') {
+                      addResult.then(function(){ finish(true, 'Added to cart.'); })
+                               .catch(function(){ finish(false, 'Failed to add to cart.'); });
+                    }
+                  } catch (err) {
+                    console.log('[registry] addProduct error:', err);
+                    untrackRegItem(productId, registry.id);
+                    finish(false, 'Failed to add to cart.');
+                  }
+                }
+
+                // If this item has a registry price, request a discount coupon from
+                // the server and apply it via Ecwid.Cart.setCouponCode before adding.
+                // Ecwid.Cart.addProduct does not support price override for standard products.
+                if (registryPrice != null && !isNaN(registryPrice)) {
+                  fetch(baseUrl + '/api/registry-price-coupon', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ registry_id: registry.id, product_id: productId })
+                  })
+                  .then(function(r){ return r.json(); })
+                  .then(function(data){
+                    if (data.coupon && window.Ecwid && typeof Ecwid.Cart.setCouponCode === 'function') {
+                      console.log('[registry] applying coupon', data.coupon, 'for registry price $' + registryPrice);
+                      try { Ecwid.Cart.setCouponCode(data.coupon); } catch(e){}
+                      // Small delay so Ecwid processes the coupon before the product is added
+                      setTimeout(doAdd, 150);
+                    } else {
+                      doAdd();
+                    }
+                  })
+                  .catch(function(){ doAdd(); });
+                } else {
+                  doAdd();
+                }
               }
             })
             .catch(function(err){
