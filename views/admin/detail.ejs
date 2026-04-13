@@ -66,6 +66,7 @@
     <input type="hidden" name="product_id" id="add-product-id" />
     <input type="hidden" name="product_name" id="add-product-name" />
     <input type="hidden" name="product_sku" id="add-product-sku" />
+    <input type="hidden" name="unit_price" id="add-unit-price" />
     <input type="hidden" name="desired_qty" value="1" />
   </form>
 
@@ -95,9 +96,10 @@
     <div class="row">
       <div>
         <div class="strong"><%= item.product_name || 'Registry item' %></div>
-        <% if (item.supplier) { %>
-          <div class="muted" style="font-size:12px">Supplier: <%= item.supplier %></div>
-        <% } %>
+        <div class="muted" style="font-size:12px">
+          <% if (item.unit_price != null) { %>$<%= Number(item.unit_price).toFixed(2) %><% if (item.supplier) { %> &nbsp;·&nbsp; <% } %><% } %>
+          <% if (item.supplier) { %><%= item.supplier %><% } %>
+        </div>
         <div class="item-progress">
           <span class="progress-label">Needed: <strong><%= item.still_needed %></strong></span>
           <span class="progress-sep">·</span>
@@ -112,7 +114,8 @@
       <div class="row-actions">
         <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/quantity" class="qty-form">
           <input name="desired_qty" type="number" min="1" value="<%= item.desired_qty %>" style="width:60px" />
-          <input name="supplier" type="text" value="<%= item.supplier || '' %>" placeholder="Supplier" style="width:120px" />
+          <input name="unit_price" type="number" step="0.01" min="0" value="<%= item.unit_price != null ? item.unit_price : '' %>" placeholder="Price $" style="width:90px" />
+          <input name="supplier" type="text" value="<%= item.supplier || '' %>" placeholder="Supplier" style="width:110px" />
           <button class="btn secondary" type="submit">Update</button>
         </form>
         <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/delete" onsubmit="return confirm('Remove this item from the registry?');">
@@ -205,6 +208,23 @@
 <!-- Purchases -->
 <div class="card">
   <h2>Purchases</h2>
+  <div class="purchases-summary">
+    <div class="summary-stat">
+      <div class="summary-val"><%= totalItems %></div>
+      <div class="summary-label">Registry items</div>
+    </div>
+    <div class="summary-stat">
+      <div class="summary-val"><% if (anyPriced) { %>$<%= totalDesiredValue.toFixed(2) %><% } else { %>—<% } %></div>
+      <div class="summary-label">Total desired</div>
+    </div>
+    <div class="summary-stat">
+      <div class="summary-val"><% if (anyPriced) { %>$<%= totalPurchasedValue.toFixed(2) %><% } else { %>—<% } %></div>
+      <div class="summary-label">Total purchased</div>
+    </div>
+  </div>
+  <% if (!anyPriced && items.length > 0) { %>
+    <div class="muted" style="font-size:12px;margin-bottom:12px">Add prices to items above to see dollar totals.</div>
+  <% } %>
   <% if (purchases.length === 0) { %>
     <div class="muted">No purchases yet.</div>
   <% } %>
@@ -538,20 +558,21 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
       return;
     }
     dropdown.innerHTML = items.map(function(item) {
-      return '<div class="search-result" tabindex="0" data-id="' + esc(item.id) + '" data-name="' + esc(item.name) + '" data-sku="' + esc(item.sku) + '">' +
+      return '<div class="search-result" tabindex="0" data-id="' + esc(item.id) + '" data-name="' + esc(item.name) + '" data-sku="' + esc(item.sku) + '" data-price="' + esc(item.price || '') + '">' +
         '<span class="search-result-name">' + escHtml(item.name) + '</span>' +
         (item.sku ? '<span class="search-result-sku">' + escHtml(item.sku) + '</span>' : '') +
         '</div>';
     }).join('');
     dropdown.querySelectorAll('.search-result').forEach(function(el) {
-      el.addEventListener('click', function(){ selectProduct(this.dataset.id, this.dataset.name, this.dataset.sku); });
+      el.addEventListener('click', function(){ selectProduct(this.dataset.id, this.dataset.name, this.dataset.sku, this.dataset.price); });
     });
   }
 
-  function selectProduct(id, name, sku) {
+  function selectProduct(id, name, sku, price) {
     document.getElementById('add-product-id').value = id;
     document.getElementById('add-product-name').value = name;
     document.getElementById('add-product-sku').value = sku;
+    document.getElementById('add-unit-price').value = price || '';
     dropdown.style.display = 'none';
     addForm.submit();
   }

@@ -262,6 +262,40 @@ code {
   text-decoration: underline;
 }
 
+/* ── Purchases summary bar ── */
+.purchases-summary {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.summary-stat {
+  flex: 1;
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+  text-align: center;
+}
+
+.summary-stat:last-child { border-right: none; }
+
+.summary-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.summary-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 /* ── Live product search dropdown ── */
 .search-wrap {
   position: relative;

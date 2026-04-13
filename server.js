@@ -172,6 +172,9 @@ const init = db.transaction(() => {
   if (!itemCols.includes("supplier")) {
     db.exec("ALTER TABLE registry_item ADD COLUMN supplier TEXT");
   }
+  if (!itemCols.includes("unit_price")) {
+    db.exec("ALTER TABLE registry_item ADD COLUMN unit_price REAL");
+  }
   const purchaseCols = db.prepare("PRAGMA table_info(registry_purchase)").all().map((c) => c.name);
   if (!purchaseCols.includes("product_name")) {
     db.exec("ALTER TABLE registry_purchase ADD COLUMN product_name TEXT");
@@ -781,7 +784,14 @@ app.get("/admin/registry/:id", async (req, res) => {
   const portalWidgetUrl = `${BASE_URL}/widget/portal.js`;
   const cartWidgetUrl = `${BASE_URL}/widget/cart.js`;
   const ecwidStoreId = req.ecwid.store_id || registry.store_id;
-  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId });
+
+  // Purchases card summary totals
+  const totalItems = items.length;
+  const totalDesiredValue = items.reduce((s, i) => s + (i.unit_price || 0) * i.desired_qty, 0);
+  const totalPurchasedValue = items.reduce((s, i) => s + (i.unit_price || 0) * i.purchased_qty, 0);
+  const anyPriced = items.some(i => i.unit_price != null);
+
+  res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId, totalItems, totalDesiredValue, totalPurchasedValue, anyPriced });
 });
 
 // Live product search endpoint (used by the Add Item dropdown)
@@ -806,7 +816,7 @@ app.get("/admin/registry/:id/product-search", async (req, res) => {
   for (const item of [...(byKeyword.items || []), ...(bySku.items || [])]) {
     if (!seen.has(item.id)) {
       seen.add(item.id);
-      merged.push({ id: item.id, name: item.name, sku: item.sku || "" });
+      merged.push({ id: item.id, name: item.name, sku: item.sku || "", price: item.price || 0 });
     }
   }
 
@@ -895,7 +905,7 @@ app.post("/admin/settings", (req, res) => {
 
 app.post("/admin/registry/:id/items", async (req, res) => {
   const registryId = Number(req.params.id);
-  const { product_id, product_name, product_sku, desired_qty } = req.body;
+  const { product_id, product_name, product_sku, desired_qty, unit_price } = req.body;
   const registry = getRegistryByIdForStore(registryId, req.ecwid?.store_id);
   if (!registry) return res.status(404).send("Not found");
   const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
@@ -903,6 +913,7 @@ app.post("/admin/registry/:id/items", async (req, res) => {
   let name = product_name?.trim() || null;
   let sku = product_sku?.trim() || null;
   let thumbnail = null;
+  let price = unit_price !== undefined && unit_price !== "" ? Number(unit_price) : null;
 
   if (!productId && sku) {
     const bySku = await fetchEcwidProductBySku(sku, creds.storeId, creds.accessToken);
@@ -914,6 +925,7 @@ app.post("/admin/registry/:id/items", async (req, res) => {
     if (!name) name = bySku.product.name || null;
     if (!sku) sku = bySku.product.sku || null;
     if (!thumbnail) thumbnail = bySku.product.thumbnailUrl || null;
+    if (price === null && bySku.product.price != null) price = Number(bySku.product.price);
   }
 
   if (productId && (!name || !sku)) {
@@ -922,6 +934,7 @@ app.post("/admin/registry/:id/items", async (req, res) => {
       if (!name) name = product.name || null;
       if (!sku) sku = product.sku || null;
       if (!thumbnail) thumbnail = product.thumbnailUrl || null;
+      if (price === null && product.price != null) price = Number(product.price);
     }
   }
 
@@ -940,12 +953,13 @@ app.post("/admin/registry/:id/items", async (req, res) => {
     .get(registryId, productId);
   if (existingItem) {
     db.prepare(
-      "UPDATE registry_item SET desired_qty = ?, product_name = ?, product_sku = ?, product_thumbnail = ? WHERE id = ?"
+      "UPDATE registry_item SET desired_qty = ?, product_name = ?, product_sku = ?, product_thumbnail = ?, unit_price = COALESCE(?, unit_price) WHERE id = ?"
     ).run(
       existingItem.desired_qty + desiredQty,
       name || existingItem.product_name,
       sku || existingItem.product_sku,
       thumbnail || existingItem.product_thumbnail,
+      price,
       existingItem.id
     );
     const msg = encodeURIComponent("Item already existed. Desired quantity was increased.");
@@ -953,8 +967,8 @@ app.post("/admin/registry/:id/items", async (req, res) => {
   }
 
   db.prepare(
-    "INSERT INTO registry_item (registry_id, product_id, product_name, product_sku, desired_qty, product_thumbnail) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(registryId, productId, name, sku, desiredQty, thumbnail);
+    "INSERT INTO registry_item (registry_id, product_id, product_name, product_sku, desired_qty, product_thumbnail, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(registryId, productId, name, sku, desiredQty, thumbnail, price);
   res.redirect(`/admin/registry/${registryId}`);
 });
 
@@ -972,7 +986,9 @@ app.post("/admin/registry/:id/items/:itemId/quantity", (req, res) => {
     return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
   }
   const supplier = String(req.body.supplier || "").trim() || null;
-  db.prepare("UPDATE registry_item SET desired_qty = ?, supplier = ? WHERE id = ?").run(desiredQty, supplier, itemId);
+  const priceRaw = req.body.unit_price;
+  const unitPrice = priceRaw !== undefined && priceRaw !== "" ? Number(priceRaw) : null;
+  db.prepare("UPDATE registry_item SET desired_qty = ?, supplier = ?, unit_price = COALESCE(?, unit_price) WHERE id = ?").run(desiredQty, supplier, unitPrice, itemId);
   const msg = encodeURIComponent("Item updated.");
   return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
 });
