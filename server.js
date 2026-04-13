@@ -1497,36 +1497,54 @@ async function processEcwidOrder(order, { storeId: orderStoreId, accessToken: or
     const productId = Number(item.productId);
     if (!productId) continue;
 
-    const matchQuery = hintRegistryId
-      ? "SELECT ri.registry_id FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND ri.registry_id = ? AND r.status = 'active'"
-      : "SELECT ri.registry_id FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND r.status = 'active'";
-    const matchParams = hintRegistryId ? [productId, hintRegistryId] : [productId];
-    const matches = db.prepare(matchQuery).all(...matchParams);
+    // Determine exactly which (registry, qty) pairs to record for this product.
+    // Priority: per-item allocation data > single-registry hint > last-resort single match.
+    let pairs = []; // [{ registryId, qty }]
 
-    for (const match of matches) {
+    if (registryAllocations && registryAllocations[String(productId)]) {
+      // CASE 1: Cart widget sent per-item allocation data — most precise signal.
+      // Only record against registries explicitly listed in the allocation.
+      for (const alloc of registryAllocations[String(productId)]) {
+        const registryId = Number(alloc.rid);
+        if (!registryId || !(alloc.qty > 0)) continue;
+        const exists = db.prepare(
+          "SELECT 1 FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND ri.registry_id = ? AND r.status = 'active'"
+        ).get(productId, registryId);
+        if (exists) pairs.push({ registryId, qty: alloc.qty });
+      }
+    } else if (hintRegistryId) {
+      // CASE 2: Order-level single registry hint.
+      const exists = db.prepare(
+        "SELECT 1 FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND ri.registry_id = ? AND r.status = 'active'"
+      ).get(productId, hintRegistryId);
+      if (exists) pairs.push({ registryId: hintRegistryId, qty: Number(item.quantity || 1) });
+    } else {
+      // CASE 3: No hint at all — only safe to record when exactly ONE active registry
+      // has this product. If multiple registries carry the same product we cannot
+      // determine which one this purchase belongs to, so we skip.
+      const matches = db.prepare(
+        "SELECT ri.registry_id FROM registry_item ri JOIN registry r ON ri.registry_id = r.id WHERE ri.product_id = ? AND r.status = 'active'"
+      ).all(productId);
+      if (matches.length === 1) {
+        pairs.push({ registryId: matches[0].registry_id, qty: Number(item.quantity || 1) });
+      }
+    }
+
+    for (const { registryId, qty } of pairs) {
       matchedProductIds.add(productId);
-      const registryId = match.registry_id;
-      matchedRegistries.add(registryId); // Always track for annotation, even if already recorded
+      matchedRegistries.add(registryId);
 
       const dup = db
         .prepare("SELECT id FROM registry_purchase WHERE order_id = ? AND product_id = ? AND registry_id = ?")
         .get(orderNumber, productId, registryId);
       if (dup) continue;
 
-      // Use per-item registry allocation qty if available (from cart.js v8+),
-      // otherwise fall back to the full order line item quantity
-      let recordQty = Number(item.quantity || 1);
-      if (registryAllocations && registryAllocations[String(productId)]) {
-        const alloc = registryAllocations[String(productId)].find(a => a.rid === registryId);
-        if (alloc && alloc.qty > 0) recordQty = alloc.qty;
-      }
-
       db.prepare(
         "INSERT INTO registry_purchase (registry_id, product_id, product_name, product_sku, qty, buyer_name, buyer_email, notes, off_registry, channel, order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(
         registryId, productId,
         item.name || null, item.sku || null,
-        recordQty,
+        qty,
         order.billingPerson?.name || order.shippingPerson?.name || null,
         order.email || null,
         null, 0, "online", orderNumber
@@ -1890,7 +1908,7 @@ app.post("/admin/sync-orders", async (req, res) => {
 // ─── Auto-sync: poll Ecwid for recent orders every 2 minutes ─────────────────
 // Iterates all registered stores (from the `stores` table + legacy env var fallback).
 {
-  const AUTO_SYNC_INTERVAL = 2 * 60 * 1000; // 2 minutes
+  const AUTO_SYNC_INTERVAL = 30 * 1000; // 30 seconds
   setInterval(async () => {
     // Build list of stores to sync
     const storesToSync = getAllStores().map(s => ({ storeId: s.store_id, accessToken: s.access_token }));
@@ -1921,7 +1939,7 @@ app.post("/admin/sync-orders", async (req, res) => {
       }
     }
   }, AUTO_SYNC_INTERVAL);
-  console.log("[auto-sync] enabled — polling every 2 minutes for all stores");
+  console.log("[auto-sync] enabled — polling every 30 seconds for all stores");
 }
 
 // ─── Lightweight storefront cart script ──────────────────────────────────────
@@ -2430,6 +2448,20 @@ app.get("/widget/cart.js", (req, res) => {
         type: 'text',
         orderDetailsDisplaySection: 'hidden'
       };
+
+      // Also set a single registry_id hint when all registry items belong to the same registry
+      var allRids = [];
+      Object.keys(data).forEach(function(pid) {
+        data[pid].forEach(function(e) { if (allRids.indexOf(e.rid) === -1) allRids.push(e.rid); });
+      });
+      if (allRids.length === 1) {
+        ec.order.extraFields.registry_id = {
+          title: '',
+          value: String(allRids[0]),
+          type: 'text',
+          orderDetailsDisplaySection: 'hidden'
+        };
+      }
     });
   }
 
