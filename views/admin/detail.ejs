@@ -56,36 +56,20 @@
 <div class="card">
   <h2>Add Item</h2>
 
-  <form method="get" action="/admin/registry/<%= registry.id %>" class="sku-search-form">
-    <div class="sku-search-row">
-      <input name="sku" type="text" value="<%= skuSearch || '' %>" placeholder="Search by SKU…" class="sku-input" />
-      <button class="btn" type="submit">Search</button>
-    </div>
+  <div class="search-wrap">
+    <input id="product-search-input" type="text" placeholder="Search by name or SKU…" autocomplete="off" class="sku-input" />
+    <div id="product-search-dropdown" class="search-dropdown" style="display:none"></div>
+  </div>
+
+  <!-- Hidden form submitted when the user picks a result -->
+  <form id="product-add-form" method="post" action="/admin/registry/<%= registry.id %>/items" style="display:none">
+    <input type="hidden" name="product_id" id="add-product-id" />
+    <input type="hidden" name="product_name" id="add-product-name" />
+    <input type="hidden" name="product_sku" id="add-product-sku" />
+    <input type="hidden" name="desired_qty" value="1" />
   </form>
 
-  <% if (skuError) { %>
-    <div class="muted" style="margin-top:8px"><%= skuError %></div>
-  <% } %>
-  <% if (skuSearch && !skuError && skuResults.length === 0) { %>
-    <div class="muted" style="margin-top:8px">No products found for "<%= skuSearch %>".</div>
-  <% } %>
-  <% skuResults.forEach(product => { %>
-    <div class="row" style="margin-top:8px">
-      <div>
-        <div class="strong"><%= product.name %></div>
-        <div class="muted">SKU: <%= product.sku || 'n/a' %></div>
-      </div>
-      <form method="post" action="/admin/registry/<%= registry.id %>/items">
-        <input type="hidden" name="product_id" value="<%= product.id %>" />
-        <input type="hidden" name="product_sku" value="<%= product.sku || '' %>" />
-        <input type="hidden" name="product_name" value="<%= product.name %>" />
-        <input type="hidden" name="desired_qty" value="1" />
-        <button class="btn" type="submit">Add</button>
-      </form>
-    </div>
-  <% }) %>
-
-  <div class="section-divider"><span>or add manually</span></div>
+  <div class="section-divider"><span>or add manually by SKU</span></div>
 
   <form method="post" action="/admin/registry/<%= registry.id %>/items" class="manual-add-form">
     <div class="sku-search-row">
@@ -449,6 +433,90 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
       saveBtn.disabled = false;
       document.getElementById('photo-form').submit();
     });
+  }
+})();
+
+// Live product search
+(function(){
+  var input = document.getElementById('product-search-input');
+  var dropdown = document.getElementById('product-search-dropdown');
+  var addForm = document.getElementById('product-add-form');
+  var SEARCH_URL = '/admin/registry/<%= registry.id %>/product-search';
+  var debounce;
+
+  input.addEventListener('input', function() {
+    clearTimeout(debounce);
+    var q = this.value.trim();
+    if (q.length < 2) { dropdown.style.display = 'none'; return; }
+    debounce = setTimeout(function(){ doSearch(q); }, 280);
+  });
+
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') { dropdown.style.display = 'none'; }
+    if (e.key === 'ArrowDown') {
+      var first = dropdown.querySelector('.search-result');
+      if (first) { e.preventDefault(); first.focus(); }
+    }
+  });
+
+  dropdown.addEventListener('keydown', function(e) {
+    var focused = document.activeElement;
+    if (e.key === 'ArrowDown' && focused.nextElementSibling) {
+      e.preventDefault(); focused.nextElementSibling.focus();
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (focused.previousElementSibling) focused.previousElementSibling.focus();
+      else input.focus();
+    }
+    if (e.key === 'Enter' && focused.classList.contains('search-result')) {
+      e.preventDefault(); focused.click();
+    }
+    if (e.key === 'Escape') { dropdown.style.display = 'none'; input.focus(); }
+  });
+
+  document.addEventListener('click', function(e) {
+    if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.style.display = 'none';
+    }
+  });
+
+  function doSearch(q) {
+    dropdown.innerHTML = '<div class="search-loading">Searching…</div>';
+    dropdown.style.display = 'block';
+    fetch(SEARCH_URL + '?q=' + encodeURIComponent(q))
+      .then(function(r){ return r.json(); })
+      .then(function(items){ renderResults(items); })
+      .catch(function(){ dropdown.innerHTML = '<div class="search-no-results">Search failed.</div>'; });
+  }
+
+  function renderResults(items) {
+    if (!items.length) {
+      dropdown.innerHTML = '<div class="search-no-results">No products found.</div>';
+      return;
+    }
+    dropdown.innerHTML = items.map(function(item) {
+      return '<div class="search-result" tabindex="0" data-id="' + esc(item.id) + '" data-name="' + esc(item.name) + '" data-sku="' + esc(item.sku) + '">' +
+        '<span class="search-result-name">' + escHtml(item.name) + '</span>' +
+        (item.sku ? '<span class="search-result-sku">' + escHtml(item.sku) + '</span>' : '') +
+        '</div>';
+    }).join('');
+    dropdown.querySelectorAll('.search-result').forEach(function(el) {
+      el.addEventListener('click', function(){ selectProduct(this.dataset.id, this.dataset.name, this.dataset.sku); });
+    });
+  }
+
+  function selectProduct(id, name, sku) {
+    document.getElementById('add-product-id').value = id;
+    document.getElementById('add-product-name').value = name;
+    document.getElementById('add-product-sku').value = sku;
+    dropdown.style.display = 'none';
+    addForm.submit();
+  }
+
+  function esc(v) { return String(v).replace(/"/g, '&quot;'); }
+  function escHtml(v) {
+    return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 })();
 

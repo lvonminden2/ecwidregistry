@@ -511,6 +511,25 @@ async function searchEcwidProductsBySku(skuQuery, storeId, accessToken) {
   }
 }
 
+async function searchEcwidProductsByKeyword(query, storeId, accessToken) {
+  if (!accessToken || !storeId || storeId === "STORE_ID_PLACEHOLDER") {
+    return { items: [], error: "Missing Ecwid API credentials." };
+  }
+  const url = `https://app.ecwid.com/api/v3/${storeId}/products?keyword=${encodeURIComponent(query)}&limit=20`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) {
+      const body = await res.text();
+      console.log(`[ecwid-api] keyword search failed status=${res.status} body=${body}`);
+      return { items: [], error: `Ecwid search failed (${res.status})` };
+    }
+    const data = await res.json();
+    return { items: Array.isArray(data?.items) ? data.items : [], error: null };
+  } catch {
+    return { items: [], error: "Could not reach Ecwid API." };
+  }
+}
+
 async function fetchEcwidProductBySku(sku, storeId, accessToken) {
   const result = await searchEcwidProductsBySku(sku, storeId, accessToken);
   if (result.error) return { product: null, error: result.error };
@@ -760,6 +779,35 @@ app.get("/admin/registry/:id", async (req, res) => {
   const cartWidgetUrl = `${BASE_URL}/widget/cart.js`;
   const ecwidStoreId = req.ecwid.store_id || registry.store_id;
   res.render("admin/detail", { registry, items, purchases, skuSearch, skuResults, skuError, actionError, actionInfo, registrantAccount, portalLoginUrl, portalWidgetUrl, cartWidgetUrl, ecwidStoreId });
+});
+
+// Live product search endpoint (used by the Add Item dropdown)
+app.get("/admin/registry/:id/product-search", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (q.length < 2) return res.json([]);
+
+  const registryId = Number(req.params.id);
+  const registry = getRegistryById(registryId);
+  if (!registry) return res.status(404).json({ error: "Registry not found" });
+
+  const creds = resolveStoreCredentials(req.ecwid?.store_id || registry.store_id);
+
+  // Run keyword (name) and SKU searches in parallel, then merge & deduplicate.
+  const [byKeyword, bySku] = await Promise.all([
+    searchEcwidProductsByKeyword(q, creds.storeId, creds.accessToken),
+    searchEcwidProductsBySku(q, creds.storeId, creds.accessToken),
+  ]);
+
+  const seen = new Set();
+  const merged = [];
+  for (const item of [...(byKeyword.items || []), ...(bySku.items || [])]) {
+    if (!seen.has(item.id)) {
+      seen.add(item.id);
+      merged.push({ id: item.id, name: item.name, sku: item.sku || "" });
+    }
+  }
+
+  res.json(merged.slice(0, 15));
 });
 
 app.post("/admin/registry/:id/edit", (req, res) => {
