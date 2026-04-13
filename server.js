@@ -297,6 +297,7 @@ app.use((req, res, next) => {
   req.ecwid = req.session?.ecwid || null;
 
   // Safari ITP fallback: if no session cookie, try the _t admin token
+  req.ecwidFromToken = false;
   if (!req.ecwid && (req.query._t || req.body?._t)) {
     const token = req.query._t || req.body._t;
     const storeId = verifyAdminToken(token);
@@ -306,6 +307,7 @@ app.use((req, res, next) => {
         req.ecwid = { store_id: store.store_id, access_token: store.access_token, public_token: store.public_token || "", lang: "" };
         // Try to restore the session for subsequent requests (may work in Chrome)
         req.session.ecwid = req.ecwid;
+        req.ecwidFromToken = true;
       }
     }
   }
@@ -549,11 +551,8 @@ function requireStore(req, res, next) {
 
 // ── Ecwid iframe auth middleware ───────────────────────────────────────────────
 function requireEcwid(req, res, next) {
-  if (req.ecwid) return next();
-
-  // Always try to bootstrap from the Ecwid payload query param when present.
-  // This handles the case where the iframeUrl is configured as /admin
-  // instead of /ecwid/iframe, or when the session cookie is lost.
+  // A fresh Ecwid payload always wins — handles the initial iframe load and
+  // cases where the session is lost.
   if (req.query.payload && ECWID_CLIENT_SECRET) {
     const data = decryptEcwidPayload(req.query.payload);
     if (data) {
@@ -569,6 +568,19 @@ function requireEcwid(req, res, next) {
       }
       return next();
     }
+  }
+
+  if (req.ecwid) {
+    // Block direct URL access (address bar / bookmark) even when a session cookie
+    // exists. Sec-Fetch-Site is "none" only for top-level navigations with no
+    // referrer — i.e. the user visited the URL directly outside of Ecwid.
+    // In-frame navigation is "same-origin"; the initial Ecwid iframe load is
+    // "cross-site". Either is fine. If the header is absent (old browsers) we
+    // fall back to allowing the session so existing behaviour is preserved.
+    // The _t token (Safari ITP workaround) also bypasses this check.
+    const fetchSite = req.headers['sec-fetch-site'];
+    if (fetchSite !== 'none' || req.ecwidFromToken) return next();
+    return res.status(401).send("This app must be opened from the Ecwid admin panel.");
   }
 
   if (ALLOW_NO_ECWID) {
