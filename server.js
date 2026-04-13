@@ -3001,7 +3001,14 @@ app.get("/widget/registry.js", (req, res) => {
       }
       const rows = items.map(item => {
         const stillNeeded = Number(item.still_needed ?? Math.max(0, (item.desired_qty || 0) - (item.purchased_qty || 0)));
-        const action = '<button class="reg-btn" data-product-id="' + item.product_id + '">Add to cart</button>';
+        const unitPrice = item.unit_price != null ? Number(item.unit_price) : null;
+        const priceAttr = unitPrice != null ? ' data-unit-price="' + unitPrice + '"' : '';
+        const priceHtml = unitPrice != null
+          ? '<div class="reg-item-registry-price">Registry price: $' + unitPrice.toFixed(2) + '</div>'
+          : '';
+        const action = stillNeeded > 0
+          ? '<button class="reg-btn" data-product-id="' + item.product_id + '"' + priceAttr + '>Add to cart</button>'
+          : '<span class="reg-fulfilled">Fulfilled</span>';
         const thumbHtml = item.product_thumbnail
           ? '<img class="reg-item-thumb" src="' + esc(item.product_thumbnail) + '" alt="" />'
           : '';
@@ -3010,6 +3017,7 @@ app.get("/widget/registry.js", (req, res) => {
             thumbHtml +
             '<div>' +
               '<div class="reg-item-name">' + esc(item.product_name || 'Registry item') + '</div>' +
+              priceHtml +
               '<div class="reg-item-meta">Desired: ' + item.desired_qty +
                 ' · Purchased: ' + item.purchased_qty +
                 ' · Still Needed: ' + stillNeeded + '</div>' +
@@ -3053,6 +3061,8 @@ app.get("/widget/registry.js", (req, res) => {
       container.querySelectorAll('.reg-btn[data-product-id]').forEach(btn => {
         btn.addEventListener('click', () => {
           const productId = Number(btn.getAttribute('data-product-id') || 0);
+          const priceAttrVal = btn.getAttribute('data-unit-price');
+          const registryPrice = priceAttrVal !== null && priceAttrVal !== '' ? Number(priceAttrVal) : null;
           if (!productId) {
             setStatus('This item cannot be added right now.', true);
             return;
@@ -3120,10 +3130,14 @@ app.get("/widget/registry.js", (req, res) => {
 
                 // Fire addProduct — use the modern object form so the callback
                 // is reliably invoked; also handle if it returns a Promise.
-                console.log('[registry] adding product', productId);
+                // If the registry item has a custom unit_price, pass it so the
+                // shopper gets registry-exclusive pricing at checkout.
+                console.log('[registry] adding product', productId, registryPrice != null ? '@ $' + registryPrice : '');
+                const addPayload = { id: productId, quantity: 1 };
+                if (registryPrice != null && !isNaN(registryPrice)) addPayload.price = registryPrice;
                 try {
                   const addResult = Ecwid.Cart.addProduct(
-                    { id: productId, quantity: 1 },
+                    addPayload,
                     function(success){
                       console.log('[registry] addProduct callback:', success);
                       finish(success !== false, success !== false ? 'Added to cart.' : 'Ecwid rejected this item.');
