@@ -541,6 +541,12 @@ function requireRegistrant(req, res, next) {
   next();
 }
 
+function requireStore(req, res, next) {
+  const storeId = req.query.store_id;
+  if (!storeId || !getStore(storeId)) return res.status(403).send("Access restricted.");
+  next();
+}
+
 // ── Ecwid iframe auth middleware ───────────────────────────────────────────────
 function requireEcwid(req, res, next) {
   if (req.ecwid) return next();
@@ -1306,19 +1312,19 @@ app.post("/portal/items", requireRegistrant, async (req, res) => {
 });
 
 // Public pages
-app.get("/registry", (req, res) => {
-  const storeId = req.query.store_id || LEGACY_ECWID_STORE_ID || "";
+app.get("/registry", requireStore, (req, res) => {
+  const storeId = req.query.store_id;
   res.render("public/registry", { baseUrl: BASE_URL, storeId });
 });
 
-app.get("/registry/:id", (req, res) => {
+app.get("/registry/:id", requireStore, (req, res) => {
   const registryId = Number(req.params.id);
-  const storeId = req.query.store_id || LEGACY_ECWID_STORE_ID || "";
+  const storeId = req.query.store_id;
   res.render("public/registry-detail", { baseUrl: BASE_URL, registryId, storeId });
 });
 
-app.get("/registry-embed", (req, res) => {
-  const storeId = req.query.store_id || LEGACY_ECWID_STORE_ID || "";
+app.get("/registry-embed", requireStore, (req, res) => {
+  const storeId = req.query.store_id;
   res.render("public/registry-embed", { storeId });
 });
 
