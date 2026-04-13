@@ -4,160 +4,117 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Registry — <%= registry.display_name %></title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=Prata&display=swap" rel="stylesheet" />
   <style>
-    :root {
-      --accent: #820000;
-      --muted: #6b6058;
-      --border: #d8cfc8;
-      --ink: #212427;
-    }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      font-family: "DM Sans", sans-serif;
+      font-family: Arial, sans-serif;
       font-size: 13px;
-      color: var(--ink);
+      color: #000;
       background: #fff;
       padding: 32px 40px;
     }
 
     .print-header {
-      display: flex;
-      align-items: flex-start;
-      gap: 24px;
-      margin-bottom: 28px;
-      padding-bottom: 20px;
-      border-bottom: 2px solid var(--accent);
-    }
-
-    .print-photo {
-      width: 90px;
-      height: 90px;
-      object-fit: cover;
-      border-radius: 4px;
-      flex-shrink: 0;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #000;
     }
 
     .print-title {
-      font-family: "Prata", serif;
-      font-size: 26px;
-      font-weight: 400;
-      letter-spacing: 0.01em;
-      color: var(--ink);
+      font-size: 22px;
+      font-weight: bold;
       margin-bottom: 4px;
     }
 
     .print-meta {
       font-size: 12px;
-      color: var(--muted);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
+      color: #555;
     }
 
     .print-actions {
-      margin-left: auto;
+      margin-top: 14px;
       display: flex;
-      gap: 10px;
-      align-items: flex-start;
+      gap: 8px;
     }
 
     .print-btn {
-      background: var(--accent);
+      background: #000;
       color: #fff;
-      border: 1px solid var(--accent);
-      border-radius: 999px;
-      padding: 8px 20px;
-      font-family: "DM Sans", sans-serif;
-      font-size: 11px;
-      font-weight: 500;
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
+      border: 1px solid #000;
+      border-radius: 3px;
+      padding: 6px 16px;
+      font-family: Arial, sans-serif;
+      font-size: 12px;
       cursor: pointer;
     }
 
     .print-btn.secondary {
-      background: transparent;
-      color: var(--accent);
+      background: #fff;
+      color: #000;
     }
 
     table {
       width: 100%;
       border-collapse: collapse;
+      margin-top: 4px;
     }
 
     thead th {
-      font-size: 10px;
-      font-weight: 500;
-      letter-spacing: 0.1em;
+      font-size: 11px;
+      font-weight: bold;
       text-transform: uppercase;
-      color: var(--muted);
+      letter-spacing: 0.05em;
       text-align: left;
       padding: 8px 10px;
-      border-bottom: 2px solid var(--border);
+      border-top: 1px solid #000;
+      border-bottom: 1px solid #000;
       white-space: nowrap;
+      background: #fff;
     }
 
     tbody td {
-      padding: 11px 10px;
-      border-bottom: 1px solid var(--border);
+      padding: 9px 10px;
+      border-bottom: 1px solid #ccc;
       vertical-align: top;
     }
 
-    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:last-child td { border-bottom: 1px solid #000; }
 
-    .item-name { font-weight: 500; font-size: 13px; }
-    .item-sku  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .item-name { font-weight: bold; }
+    .item-sku  { font-size: 11px; color: #555; margin-top: 2px; }
 
     .num { text-align: center; }
 
-    .still-needed {
-      font-weight: 500;
-      color: var(--accent);
-    }
-
-    .still-needed.zero {
-      color: #2a6e3f;
-    }
-
     .print-footer {
-      margin-top: 28px;
+      margin-top: 16px;
       font-size: 11px;
-      color: var(--muted);
-      border-top: 1px solid var(--border);
-      padding-top: 10px;
+      color: #555;
       display: flex;
       justify-content: space-between;
     }
 
-    /* ── Print styles ── */
     @media print {
       .print-actions { display: none !important; }
       body { padding: 0; }
       @page { margin: 18mm 16mm; }
+      thead th { border-top: 2px solid #000; border-bottom: 2px solid #000; }
     }
   </style>
 </head>
 <body>
 
 <div class="print-header">
-  <% if (registry.photo) { %>
-    <img class="print-photo" src="<%= registry.photo %>" alt="" />
-  <% } %>
-  <div>
-    <div class="print-title"><%= registry.display_name %></div>
-    <div class="print-meta">
-      <% if (registry.event_date) { %>
-        <%= new Date(registry.event_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) %> &nbsp;·&nbsp;
-      <% } %>
-      Registry items list
-    </div>
+  <div class="print-title"><%= registry.display_name %></div>
+  <div class="print-meta">
+    <% if (registry.event_date) { %>
+      <%= new Date(registry.event_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) %> &nbsp;&middot;&nbsp;
+    <% } %>
+    Registry items list
   </div>
   <div class="print-actions">
     <button class="print-btn" onclick="window.print()">Print / Save PDF</button>
+    <button class="print-btn secondary" onclick="exportCSV()">Export to Excel</button>
     <button class="print-btn secondary" onclick="window.close()">Close</button>
   </div>
 </div>
@@ -165,29 +122,28 @@
 <table>
   <thead>
     <tr>
-      <th style="width:40%">Item</th>
+      <th style="width:45%">Item</th>
+      <th>SKU</th>
       <th class="num">Desired</th>
       <th class="num">Purchased</th>
-      <th class="num">Still needed</th>
+      <th class="num">Still Needed</th>
     </tr>
   </thead>
   <tbody>
     <% if (items.length === 0) { %>
       <tr>
-        <td colspan="4" style="color:var(--muted);padding:20px 10px">No items on this registry yet.</td>
+        <td colspan="5" style="color:#555;padding:20px 10px">No items on this registry yet.</td>
       </tr>
     <% } %>
     <% items.forEach(item => { %>
       <tr>
         <td>
           <div class="item-name"><%= item.product_name || 'Registry item' %></div>
-          <% if (item.product_sku) { %>
-            <div class="item-sku">SKU: <%= item.product_sku %></div>
-          <% } %>
         </td>
+        <td><% if (item.product_sku) { %><span class="item-sku"><%= item.product_sku %></span><% } %></td>
         <td class="num"><%= item.desired_qty %></td>
         <td class="num"><%= item.purchased_qty %></td>
-        <td class="num still-needed <%= item.still_needed === 0 ? 'zero' : '' %>"><%= item.still_needed %></td>
+        <td class="num"><%= item.still_needed %></td>
       </tr>
     <% }) %>
   </tbody>
@@ -195,8 +151,45 @@
 
 <div class="print-footer">
   <span>Printed <%= new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) %></span>
-  <span><%= items.length %> item<%= items.length !== 1 ? 's' : '' %> &nbsp;·&nbsp; <%= items.reduce((s,i) => s + i.still_needed, 0) %> still needed</span>
+  <span><%= items.length %> item<%= items.length !== 1 ? 's' : '' %> &nbsp;&middot;&nbsp; <%= items.reduce((s,i) => s + i.still_needed, 0) %> still needed</span>
 </div>
+
+<script>
+var ITEMS = <%- JSON.stringify(items.map(function(i) {
+  return {
+    name: i.product_name || 'Registry item',
+    sku: i.product_sku || '',
+    desired: i.desired_qty,
+    purchased: i.purchased_qty,
+    still_needed: i.still_needed
+  };
+})) %>;
+
+var REGISTRY_NAME = <%- JSON.stringify(registry.display_name) %>;
+
+function exportCSV() {
+  var rows = [['Item', 'SKU', 'Desired', 'Purchased', 'Still Needed']];
+  ITEMS.forEach(function(item) {
+    rows.push([item.name, item.sku, item.desired, item.purchased, item.still_needed]);
+  });
+  var csv = rows.map(function(row) {
+    return row.map(function(val) {
+      var s = String(val).replace(/"/g, '""');
+      return /[,"\n]/.test(s) ? '"' + s + '"' : s;
+    }).join(',');
+  }).join('\r\n');
+
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = REGISTRY_NAME.replace(/[^a-z0-9]/gi, '-').toLowerCase() + '-registry.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+</script>
 
 </body>
 </html>
