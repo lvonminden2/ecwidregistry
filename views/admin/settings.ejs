@@ -65,26 +65,6 @@
   </div>
 </div>
 
-<!-- Webhook URLs -->
-<div class="card">
-  <h2>Webhook URLs</h2>
-  <p class="muted" style="margin-bottom:12px">Register these URLs in your Ecwid app dashboard.</p>
-  <div class="settings-row">
-    <div class="settings-key">Order Created</div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <code style="font-size:12px;padding:4px 8px;background:#f5f7fa;border:1px solid var(--border);border-radius:4px"><%= webhooks.orderCreated %></code>
-      <button class="btn secondary copy-link-btn" data-url="<%= webhooks.orderCreated %>" style="font-size:12px;padding:5px 12px">Copy</button>
-    </div>
-  </div>
-  <div class="settings-row">
-    <div class="settings-key">Custom Shipping</div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <code style="font-size:12px;padding:4px 8px;background:#f5f7fa;border:1px solid var(--border);border-radius:4px"><%= webhooks.shipping %></code>
-      <button class="btn secondary copy-link-btn" data-url="<%= webhooks.shipping %>" style="font-size:12px;padding:5px 12px">Copy</button>
-    </div>
-  </div>
-</div>
-
 <!-- Editable Settings -->
 <form class="card" method="post" action="/admin/settings">
   <h2>Shipping</h2>
@@ -100,32 +80,7 @@
     </label>
   </div>
 
-  <h2 style="margin-top:24px">Registry URLs</h2>
-  <label class="field">
-    <div class="label">Public registry URL</div>
-    <input name="public_registry_url" type="url" value="<%= settings.publicRegistryUrl %>" placeholder="https://yourstore.com/registry-page" />
-    <div class="muted" style="font-size:12px;margin-top:4px">Storefront page where the registry widget is displayed. Leave blank to use the built-in /registry page.</div>
-  </label>
-  <label class="field">
-    <div class="label">Registry page URL</div>
-    <input name="registry_page_url" type="url" value="<%= settings.registryPageUrl %>" placeholder="https://yourstore.com/registry-page" />
-    <div class="muted" style="font-size:12px;margin-top:4px">Page where the registry widget JS is embedded.</div>
-  </label>
-
   <button class="btn" type="submit" style="margin-top:12px">Save settings</button>
 </form>
-
-<script>
-document.querySelectorAll('.copy-link-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const url = btn.getAttribute('data-url');
-    navigator.clipboard.writeText(url).then(() => {
-      const orig = btn.textContent;
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = orig; }, 2000);
-    });
-  });
-});
-</script>
 
 <%- include('../partials/footer') %>
