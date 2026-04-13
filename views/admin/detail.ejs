@@ -29,45 +29,265 @@
     </div>
   </div>
   <div class="toolbar-actions">
-    <button class="btn secondary copy-link-btn" data-url="<%= publicRegistryUrl %>?reg=<%= registry.id %>">Copy shareable link</button>
-    <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="<%= publicRegistryUrl %>?reg=<%= registry.id %>">View Public Page</a>
-    <a class="btn secondary" href="/admin/registry/<%= registry.id %>/print" target="_blank">Print items</a>
-    <a class="link" href="/admin">Back</a>
-    <% if (registry.status === 'active') { %>
-      <form method="post" action="/admin/registry/<%= registry.id %>/archive">
-        <button class="btn secondary" type="submit">Archive</button>
-      </form>
-    <% } %>
+    <button class="btn secondary copy-link-btn" data-url="<%= publicRegistryUrl %>?reg=<%= registry.id %>">Copy link</button>
+    <a class="btn secondary" target="_blank" rel="noopener noreferrer" href="<%= publicRegistryUrl %>?reg=<%= registry.id %>">View public page</a>
+    <div class="toolbar-secondary">
+      <a class="link" href="/admin/registry/<%= registry.id %>/print" target="_blank">Print</a>
+      <span class="toolbar-sep">·</span>
+      <a class="link" href="/admin">Back</a>
+      <% if (registry.status === 'active') { %>
+        <span class="toolbar-sep">·</span>
+        <form method="post" action="/admin/registry/<%= registry.id %>/archive" style="display:inline">
+          <button class="link-btn" type="submit">Archive</button>
+        </form>
+      <% } %>
+    </div>
   </div>
 </div>
 
-<script>
-document.querySelectorAll('.copy-link-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const url = btn.getAttribute('data-url');
-    navigator.clipboard.writeText(url).then(() => {
-      const orig = btn.textContent;
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = orig; }, 2000);
-    });
-  });
-});
-</script>
+<% if (actionError) { %>
+  <div class="card"><div class="reg-error"><%= actionError %></div></div>
+<% } %>
+<% if (actionInfo) { %>
+  <div class="card"><div style="color:#0cac42"><%= actionInfo %></div></div>
+<% } %>
 
-<div class="grid">
-  <% if (actionError) { %>
-    <div class="card">
-      <div class="reg-error"><%= actionError %></div>
+<!-- Add Item -->
+<div class="card">
+  <h2>Add Item</h2>
+
+  <form method="get" action="/admin/registry/<%= registry.id %>" class="sku-search-form">
+    <div class="sku-search-row">
+      <input name="sku" type="text" value="<%= skuSearch || '' %>" placeholder="Search by SKU…" class="sku-input" />
+      <button class="btn" type="submit">Search</button>
     </div>
+  </form>
+
+  <% if (skuError) { %>
+    <div class="muted" style="margin-top:8px"><%= skuError %></div>
   <% } %>
-  <% if (actionInfo) { %>
-    <div class="card">
-      <div class="muted"><%= actionInfo %></div>
+  <% if (skuSearch && !skuError && skuResults.length === 0) { %>
+    <div class="muted" style="margin-top:8px">No products found for "<%= skuSearch %>".</div>
+  <% } %>
+  <% skuResults.forEach(product => { %>
+    <div class="row" style="margin-top:8px">
+      <div>
+        <div class="strong"><%= product.name %></div>
+        <div class="muted">SKU: <%= product.sku || 'n/a' %></div>
+      </div>
+      <form method="post" action="/admin/registry/<%= registry.id %>/items">
+        <input type="hidden" name="product_id" value="<%= product.id %>" />
+        <input type="hidden" name="product_sku" value="<%= product.sku || '' %>" />
+        <input type="hidden" name="product_name" value="<%= product.name %>" />
+        <input type="hidden" name="desired_qty" value="1" />
+        <button class="btn" type="submit">Add</button>
+      </form>
     </div>
+  <% }) %>
+
+  <div class="section-divider"><span>or add manually</span></div>
+
+  <form method="post" action="/admin/registry/<%= registry.id %>/items" class="manual-add-form">
+    <div class="sku-search-row">
+      <input name="product_sku" type="text" required placeholder="SKU" class="sku-input" />
+      <input name="desired_qty" type="number" min="1" value="1" class="qty-input" />
+      <button class="btn" type="submit">Add item</button>
+    </div>
+  </form>
+</div>
+
+<!-- Items -->
+<div class="card">
+  <h2>Items</h2>
+  <% if (items.length === 0) { %>
+    <div class="muted">No items yet.</div>
   <% } %>
+  <% items.forEach(item => { %>
+    <div class="row">
+      <div>
+        <div class="strong"><%= item.product_name || 'Registry item' %></div>
+        <div class="item-progress">
+          <span class="progress-label">Needed: <strong><%= item.still_needed %></strong></span>
+          <span class="progress-sep">·</span>
+          <span class="progress-label">Purchased: <strong><%= item.purchased_qty %></strong></span>
+          <span class="progress-sep">·</span>
+          <span class="progress-label muted">Goal: <%= item.desired_qty %></span>
+        </div>
+        <% if (item.product_sku) { %>
+          <div class="muted" style="font-size:12px">SKU: <%= item.product_sku %></div>
+        <% } %>
+      </div>
+      <div class="row-actions">
+        <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/quantity" class="qty-form">
+          <input name="desired_qty" type="number" min="1" value="<%= item.desired_qty %>" />
+          <button class="btn secondary" type="submit">Update qty</button>
+        </form>
+        <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/delete" onsubmit="return confirm('Remove this item from the registry?');">
+          <button class="btn secondary" type="submit">Delete</button>
+        </form>
+      </div>
+    </div>
+  <% }) %>
+</div>
+
+<!-- Record Purchase -->
+<div class="card">
+  <h2>Record Purchase</h2>
+  <div class="radio-group" style="margin-bottom:16px">
+    <label class="radio-label">
+      <input type="radio" name="purchase_type" value="in_store" checked /> In-store registry item
+    </label>
+    <label class="radio-label">
+      <input type="radio" name="purchase_type" value="off_registry" /> Off-registry item
+    </label>
+  </div>
+
+  <form method="post" action="/admin/registry/<%= registry.id %>/purchases" id="purchase-instore-form">
+    <input type="hidden" name="channel" value="in_store" />
+    <div class="grid">
+      <label class="field">
+        <div class="label">Registry item</div>
+        <select name="product_id" required>
+          <option value="">Select an item</option>
+          <% items.forEach(item => { %>
+            <option value="<%= item.product_id %>"><%= item.product_name || 'Registry item' %><% if (item.product_sku) { %> · <%= item.product_sku %><% } %></option>
+          <% }) %>
+        </select>
+      </label>
+      <label class="field">
+        <div class="label">Quantity</div>
+        <input name="qty" type="number" step="1" value="1" />
+      </label>
+      <label class="field">
+        <div class="label">Buyer name</div>
+        <input name="buyer_name" type="text" />
+      </label>
+      <label class="field">
+        <div class="label">Buyer email</div>
+        <input name="buyer_email" type="email" />
+      </label>
+    </div>
+    <label class="field">
+      <div class="label">Notes</div>
+      <textarea name="notes" rows="2" placeholder="Optional note (gift receipt, return, etc.)"></textarea>
+    </label>
+    <button class="btn" type="submit" style="margin-top:4px">Record purchase</button>
+  </form>
+
+  <form method="post" action="/admin/registry/<%= registry.id %>/purchases/off-registry" id="purchase-offregistry-form" style="display:none">
+    <div class="grid">
+      <label class="field">
+        <div class="label">Item name</div>
+        <input name="product_name" type="text" required />
+      </label>
+      <label class="field">
+        <div class="label">SKU (optional)</div>
+        <input name="product_sku" type="text" />
+      </label>
+      <label class="field">
+        <div class="label">Quantity</div>
+        <input name="qty" type="number" step="1" value="1" />
+      </label>
+      <label class="field">
+        <div class="label">Buyer name</div>
+        <input name="buyer_name" type="text" />
+      </label>
+      <label class="field">
+        <div class="label">Buyer email</div>
+        <input name="buyer_email" type="email" />
+      </label>
+    </div>
+    <label class="field">
+      <div class="label">Notes</div>
+      <textarea name="notes" rows="2" placeholder="Optional note"></textarea>
+    </label>
+    <button class="btn" type="submit" style="margin-top:4px">Record off-registry purchase</button>
+  </form>
+</div>
+
+<!-- Purchases -->
+<div class="card">
+  <h2>Purchases</h2>
+  <% if (purchases.length === 0) { %>
+    <div class="muted">No purchases yet.</div>
+  <% } %>
+  <% purchases.forEach(p => { %>
+    <div class="row purchase-row">
+      <div>
+        <div class="strong">
+          <span class="channel-badge channel-<%= p.channel %>"><%= p.channel.replace('_', ' ') %></span>
+          <%= p.display_product_name || 'Registry item' %> · Qty <%= p.qty %>
+        </div>
+        <% if (p.off_registry) { %>
+          <div class="muted">Off-registry</div>
+        <% } %>
+        <% if (p.display_product_sku) { %>
+          <div class="muted" style="font-size:12px">SKU: <%= p.display_product_sku %></div>
+        <% } %>
+        <div class="muted"><%= p.buyer_name || 'Unknown buyer' %> · <%= p.buyer_email || '—' %></div>
+        <% if (p.order_id) { %>
+          <div class="muted">
+            <% if (locals.ecwidStoreId) { %>
+              <a href="https://my.ecwid.com/store/<%= ecwidStoreId %>/orders#order-<%= p.order_id %>" target="_blank" rel="noopener noreferrer">Order #<%= p.order_id %></a>
+            <% } else { %>
+              Order #<%= p.order_id %>
+            <% } %>
+          </div>
+        <% } %>
+        <% if (p.notes) { %>
+          <div class="muted">Notes: <%= p.notes %></div>
+        <% } %>
+      </div>
+      <div class="purchase-actions">
+        <div class="muted" style="font-size:12px"><%= p.created_at %></div>
+        <details class="purchase-edit">
+          <summary>Edit</summary>
+          <form method="post" action="/admin/registry/<%= registry.id %>/purchases/<%= p.id %>/update" class="purchase-edit-form">
+            <% if (p.off_registry) { %>
+              <label class="field">
+                <div class="label">Item name</div>
+                <input name="product_name" type="text" value="<%= p.display_product_name || '' %>" />
+              </label>
+              <label class="field">
+                <div class="label">SKU</div>
+                <input name="product_sku" type="text" value="<%= p.display_product_sku || '' %>" />
+              </label>
+            <% } %>
+            <label class="field">
+              <div class="label">Quantity</div>
+              <input name="qty" type="number" step="1" value="<%= p.qty %>" />
+            </label>
+            <label class="field">
+              <div class="label">Buyer name</div>
+              <input name="buyer_name" type="text" value="<%= p.buyer_name || '' %>" />
+            </label>
+            <label class="field">
+              <div class="label">Buyer email</div>
+              <input name="buyer_email" type="email" value="<%= p.buyer_email || '' %>" />
+            </label>
+            <label class="field">
+              <div class="label">Notes</div>
+              <textarea name="notes" rows="2"><%= p.notes || '' %></textarea>
+            </label>
+            <div class="row-actions">
+              <button class="btn secondary" type="submit">Save</button>
+            </div>
+          </form>
+        </details>
+        <form method="post" action="/admin/registry/<%= registry.id %>/purchases/<%= p.id %>/delete" onsubmit="return confirm('Delete this purchase record?');">
+          <button class="btn secondary" type="submit">Delete</button>
+        </form>
+      </div>
+    </div>
+  <% }) %>
+</div>
+
+<!-- Registry Settings (collapsed by default) -->
+<details class="settings-panel" <%= !registrantAccount ? 'open' : '' %>>
+  <summary>Registry settings</summary>
 
   <div class="card">
-    <h2>Shipping Instructions</h2>
+    <h2>Shipping</h2>
     <form method="post" action="/admin/registry/<%= registry.id %>/shipping">
       <div class="radio-group">
         <label class="radio-label">
@@ -85,70 +305,12 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
           <textarea name="shipping_address" rows="3" placeholder="Street, City, State, ZIP"><%= registry.shipping_address || '' %></textarea>
         </label>
       </div>
-      <button class="btn" type="submit" style="margin-top:10px">Save shipping settings</button>
-    </form>
-    <script>
-    (function(){
-      var radios = document.querySelectorAll('input[name="shipping_method"]');
-      var wrap = document.getElementById('shipping-address-wrap');
-      radios.forEach(function(r) {
-        r.addEventListener('change', function() {
-          wrap.style.display = this.value === 'ship_to_registrant' ? '' : 'none';
-        });
-      });
-    })();
-    </script>
-  </div>
-
-  <div class="card">
-    <h2>Search by SKU</h2>
-    <form method="get" action="/admin/registry/<%= registry.id %>">
-      <label class="field">
-        <div class="label">SKU</div>
-        <input name="sku" type="text" value="<%= skuSearch || '' %>" placeholder="Enter SKU" />
-      </label>
-      <button class="btn" type="submit">Search products</button>
-    </form>
-    <% if (skuError) { %>
-      <div class="muted"><%= skuError %></div>
-    <% } %>
-    <% if (skuSearch && !skuError && skuResults.length === 0) { %>
-      <div class="muted">No products found for SKU "<%= skuSearch %>".</div>
-    <% } %>
-    <% skuResults.forEach(product => { %>
-      <div class="row">
-        <div>
-          <div class="strong"><%= product.name %></div>
-          <div class="muted">SKU: <%= product.sku || 'n/a' %></div>
-        </div>
-        <form method="post" action="/admin/registry/<%= registry.id %>/items">
-          <input type="hidden" name="product_id" value="<%= product.id %>" />
-          <input type="hidden" name="product_sku" value="<%= product.sku || '' %>" />
-          <input type="hidden" name="product_name" value="<%= product.name %>" />
-          <input type="hidden" name="desired_qty" value="1" />
-          <button class="btn" type="submit">Add</button>
-        </form>
-      </div>
-    <% }) %>
-  </div>
-
-  <div class="card">
-    <h2>Add item</h2>
-    <form method="post" action="/admin/registry/<%= registry.id %>/items">
-      <label class="field">
-        <div class="label">SKU</div>
-        <input name="product_sku" type="text" required />
-      </label>
-      <label class="field">
-        <div class="label">Desired quantity</div>
-        <input name="desired_qty" type="number" min="1" value="1" />
-      </label>
-      <button class="btn" type="submit">Add item</button>
+      <button class="btn" type="submit" style="margin-top:10px">Save shipping</button>
     </form>
   </div>
 
   <div class="card">
-    <h2>Registry photo</h2>
+    <h2>Registry Photo</h2>
     <% if (registry.photo) { %>
       <img class="registry-photo-preview" src="<%= registry.photo %>" alt="Registry photo" />
     <% } %>
@@ -168,43 +330,6 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
         <% } %>
       </div>
     </form>
-    <script>
-    (function(){
-      const fileInput = document.getElementById('photo-file-input');
-      const dataInput = document.getElementById('photo-data-input');
-      const previewWrap = document.getElementById('photo-preview-wrap');
-      const previewImg = document.getElementById('photo-preview-img');
-      const saveBtn = document.getElementById('photo-save-btn');
-      const removeBtn = document.getElementById('photo-remove-btn');
-
-      fileInput.addEventListener('change', function(){
-        const file = this.files[0];
-        if (!file) return;
-        if (file.size > 10 * 1024 * 1024) {
-          alert('Image must be under 10 MB.');
-          this.value = '';
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = function(e){
-          dataInput.value = e.target.result;
-          previewImg.src = e.target.result;
-          previewWrap.style.display = 'block';
-          saveBtn.disabled = false;
-        };
-        reader.readAsDataURL(file);
-      });
-
-      if (removeBtn) {
-        removeBtn.addEventListener('click', function(){
-          if (!confirm('Remove the photo from this registry?')) return;
-          dataInput.value = '';
-          saveBtn.disabled = false;
-          document.getElementById('photo-form').submit();
-        });
-      }
-    })();
-    </script>
   </div>
 
   <div class="card">
@@ -254,7 +379,7 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
       </div>
       <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
         <div class="label" style="margin-bottom:6px">Embed in Ecwid Custom JavaScript</div>
-        <div class="muted" style="font-size:12px;margin-bottom:8px">Add <strong>both</strong> scripts below to <strong>Ecwid Control Panel &rarr; Settings &rarr; Design &rarr; Custom JavaScript</strong>. The portal script shows the registrant's management UI in their account. The cart script shows a registry summary panel in the cart and passes registry data to checkout.</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">Add <strong>both</strong> scripts below to <strong>Ecwid Control Panel &rarr; Settings &rarr; Design &rarr; Custom JavaScript</strong>.</div>
         <code style="display:block;font-size:11px;background:var(--bg);padding:8px 10px;border:1px solid var(--border);border-radius:4px;overflow:auto;white-space:pre-wrap">&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;
 &lt;script src="<%= cartWidgetUrl %>"&gt;&lt;/script&gt;</code>
         <button class="btn secondary copy-link-btn" data-url='&lt;script src="<%= portalWidgetUrl %>"&gt;&lt;/script&gt;&#10;&lt;script src="<%= cartWidgetUrl %>"&gt;&lt;/script&gt;' style="margin-top:8px">Copy snippet</button>
@@ -264,173 +389,86 @@ document.querySelectorAll('.copy-link-btn').forEach(btn => {
       </form>
     <% } %>
   </div>
+</details>
 
-  <div class="card">
-    <h2>Mark purchase (in-store)</h2>
-    <form method="post" action="/admin/registry/<%= registry.id %>/purchases">
-      <input type="hidden" name="channel" value="in_store" />
-      <label class="field">
-        <div class="label">Registry item</div>
-        <select name="product_id" required>
-          <option value="">Select an item</option>
-          <% items.forEach(item => { %>
-            <option value="<%= item.product_id %>"><%= item.product_name || 'Registry item' %><% if (item.product_sku) { %> (SKU: <%= item.product_sku %>)<% } %></option>
-          <% }) %>
-        </select>
-      </label>
-      <label class="field">
-        <div class="label">Quantity</div>
-        <input name="qty" type="number" step="1" value="1" />
-      </label>
-      <label class="field">
-        <div class="label">Buyer name</div>
-        <input name="buyer_name" type="text" />
-      </label>
-      <label class="field">
-        <div class="label">Buyer email</div>
-        <input name="buyer_email" type="email" />
-      </label>
-      <label class="field">
-        <div class="label">Notes</div>
-        <textarea name="notes" rows="2" placeholder="Optional note (gift receipt, return, exchange, etc.)"></textarea>
-      </label>
-      <button class="btn" type="submit">Record purchase</button>
-    </form>
-  </div>
+<script>
+// Copy link buttons
+document.querySelectorAll('.copy-link-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const url = btn.getAttribute('data-url');
+    navigator.clipboard.writeText(url).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    });
+  });
+});
 
-  <div class="card">
-    <h2>Record off-registry purchase</h2>
-    <form method="post" action="/admin/registry/<%= registry.id %>/purchases/off-registry">
-      <label class="field">
-        <div class="label">Item name</div>
-        <input name="product_name" type="text" required />
-      </label>
-      <label class="field">
-        <div class="label">SKU (optional)</div>
-        <input name="product_sku" type="text" />
-      </label>
-      <label class="field">
-        <div class="label">Quantity</div>
-        <input name="qty" type="number" step="1" value="1" />
-      </label>
-      <label class="field">
-        <div class="label">Buyer name</div>
-        <input name="buyer_name" type="text" />
-      </label>
-      <label class="field">
-        <div class="label">Buyer email</div>
-        <input name="buyer_email" type="email" />
-      </label>
-      <label class="field">
-        <div class="label">Notes</div>
-        <textarea name="notes" rows="2" placeholder="Optional note"></textarea>
-      </label>
-      <button class="btn" type="submit">Record off-registry purchase</button>
-    </form>
-  </div>
-</div>
+// Shipping address toggle
+(function(){
+  var radios = document.querySelectorAll('input[name="shipping_method"]');
+  var wrap = document.getElementById('shipping-address-wrap');
+  radios.forEach(function(r) {
+    r.addEventListener('change', function() {
+      wrap.style.display = this.value === 'ship_to_registrant' ? '' : 'none';
+    });
+  });
+})();
 
-<div class="card">
-  <h2>Items</h2>
-  <% if (items.length === 0) { %>
-    <div class="muted">No items yet.</div>
-  <% } %>
-  <% items.forEach(item => { %>
-    <div class="row">
-      <div>
-        <div class="strong"><%= item.product_name || 'Registry item' %></div>
-        <div class="muted">Desired Qty: <%= item.desired_qty %> · Purchased: <%= item.purchased_qty %> · Still Needed: <%= item.still_needed %></div>
-        <% if (item.product_sku) { %>
-          <div class="muted">SKU: <%= item.product_sku %></div>
-        <% } %>
-      </div>
-      <div class="row-actions">
-        <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/quantity" class="qty-form">
-          <input name="desired_qty" type="number" min="1" value="<%= item.desired_qty %>" />
-          <button class="btn secondary" type="submit">Update Qty</button>
-        </form>
-        <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/delete" onsubmit="return confirm('Remove this item from the registry?');">
-          <button class="btn secondary" type="submit">Delete</button>
-        </form>
-      </div>
-    </div>
-  <% }) %>
-</div>
+// Photo upload
+(function(){
+  const fileInput = document.getElementById('photo-file-input');
+  const dataInput = document.getElementById('photo-data-input');
+  const previewWrap = document.getElementById('photo-preview-wrap');
+  const previewImg = document.getElementById('photo-preview-img');
+  const saveBtn = document.getElementById('photo-save-btn');
+  const removeBtn = document.getElementById('photo-remove-btn');
 
-<div class="card">
-  <h2>Purchases</h2>
-  <% if (purchases.length === 0) { %>
-    <div class="muted">No purchases yet.</div>
-  <% } %>
-  <% purchases.forEach(p => { %>
-    <div class="row purchase-row">
-      <div>
-        <div class="strong">
-          <span class="channel-badge channel-<%= p.channel %>"><%= p.channel.replace('_', ' ') %></span>
-          <%= p.display_product_name || 'Registry item' %> · Qty <%= p.qty %>
-        </div>
-        <% if (p.off_registry) { %>
-          <div class="muted">Off-registry purchase (does not appear on public registry list).</div>
-        <% } %>
-        <% if (p.display_product_sku) { %>
-          <div class="muted">SKU: <%= p.display_product_sku %></div>
-        <% } %>
-        <div class="muted"><%= p.buyer_name || 'Unknown buyer' %> · <%= p.buyer_email || '—' %></div>
-        <% if (p.order_id) { %>
-          <div class="muted">
-            <% if (locals.ecwidStoreId) { %>
-              <a href="https://my.ecwid.com/store/<%= ecwidStoreId %>/orders#order-<%= p.order_id %>" target="_blank" rel="noopener noreferrer">Ecwid order #<%= p.order_id %></a>
-            <% } else { %>
-              Ecwid order #<%= p.order_id %>
-            <% } %>
-          </div>
-        <% } %>
-        <% if (p.notes) { %>
-          <div class="muted">Notes: <%= p.notes %></div>
-        <% } %>
-      </div>
-      <div class="purchase-actions">
-        <div class="muted"><%= p.created_at %></div>
-        <details class="purchase-edit">
-          <summary>Edit</summary>
-          <form method="post" action="/admin/registry/<%= registry.id %>/purchases/<%= p.id %>/update" class="purchase-edit-form">
-            <% if (p.off_registry) { %>
-              <label class="field">
-                <div class="label">Item name</div>
-                <input name="product_name" type="text" value="<%= p.display_product_name || '' %>" />
-              </label>
-              <label class="field">
-                <div class="label">SKU</div>
-                <input name="product_sku" type="text" value="<%= p.display_product_sku || '' %>" />
-              </label>
-            <% } %>
-            <label class="field">
-              <div class="label">Quantity</div>
-              <input name="qty" type="number" step="1" value="<%= p.qty %>" />
-            </label>
-            <label class="field">
-              <div class="label">Buyer name</div>
-              <input name="buyer_name" type="text" value="<%= p.buyer_name || '' %>" />
-            </label>
-            <label class="field">
-              <div class="label">Buyer email</div>
-              <input name="buyer_email" type="email" value="<%= p.buyer_email || '' %>" />
-            </label>
-            <label class="field">
-              <div class="label">Notes</div>
-              <textarea name="notes" rows="2"><%= p.notes || '' %></textarea>
-            </label>
-            <div class="row-actions">
-              <button class="btn secondary" type="submit">Save</button>
-            </div>
-          </form>
-        </details>
-        <form method="post" action="/admin/registry/<%= registry.id %>/purchases/<%= p.id %>/delete" onsubmit="return confirm('Delete this purchase record?');">
-          <button class="btn secondary" type="submit">Delete</button>
-        </form>
-      </div>
-    </div>
-  <% }) %>
-</div>
+  fileInput.addEventListener('change', function(){
+    const file = this.files[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Image must be under 10 MB.');
+      this.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e){
+      dataInput.value = e.target.result;
+      previewImg.src = e.target.result;
+      previewWrap.style.display = 'block';
+      saveBtn.disabled = false;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  if (removeBtn) {
+    removeBtn.addEventListener('click', function(){
+      if (!confirm('Remove the photo from this registry?')) return;
+      dataInput.value = '';
+      saveBtn.disabled = false;
+      document.getElementById('photo-form').submit();
+    });
+  }
+})();
+
+// Purchase type toggle
+(function(){
+  var radios = document.querySelectorAll('input[name="purchase_type"]');
+  var instoreForm = document.getElementById('purchase-instore-form');
+  var offForm = document.getElementById('purchase-offregistry-form');
+  radios.forEach(function(r) {
+    r.addEventListener('change', function() {
+      if (this.value === 'in_store') {
+        instoreForm.style.display = '';
+        offForm.style.display = 'none';
+      } else {
+        instoreForm.style.display = 'none';
+        offForm.style.display = '';
+      }
+    });
+  });
+})();
+</script>
 
 <%- include('../partials/footer') %>
