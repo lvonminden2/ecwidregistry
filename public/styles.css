@@ -356,6 +356,22 @@ textarea { resize: vertical; }
   letter-spacing: 0.03em;
 }
 
+.reg-item-registry-price {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--reg-accent);
+  margin-bottom: 2px;
+}
+
+.reg-fulfilled {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--reg-muted);
+  letter-spacing: 0.03em;
+  padding: 6px 0;
+  display: inline-block;
+}
+
 /* Registry search */
 .reg-search-wrap { margin-bottom: 24px; }
 
