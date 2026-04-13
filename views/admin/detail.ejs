@@ -82,7 +82,12 @@
 
 <!-- Items -->
 <div class="card">
-  <h2>Items</h2>
+  <div class="card-header">
+    <h2>Items</h2>
+    <% if (items.length > 0) { %>
+      <button class="btn secondary" id="export-excel-btn" style="font-size:12px;padding:5px 12px">Export to Excel</button>
+    <% } %>
+  </div>
   <% if (items.length === 0) { %>
     <div class="muted">No items yet.</div>
   <% } %>
@@ -90,6 +95,9 @@
     <div class="row">
       <div>
         <div class="strong"><%= item.product_name || 'Registry item' %></div>
+        <% if (item.supplier) { %>
+          <div class="muted" style="font-size:12px">Supplier: <%= item.supplier %></div>
+        <% } %>
         <div class="item-progress">
           <span class="progress-label">Needed: <strong><%= item.still_needed %></strong></span>
           <span class="progress-sep">·</span>
@@ -103,8 +111,9 @@
       </div>
       <div class="row-actions">
         <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/quantity" class="qty-form">
-          <input name="desired_qty" type="number" min="1" value="<%= item.desired_qty %>" />
-          <button class="btn secondary" type="submit">Update qty</button>
+          <input name="desired_qty" type="number" min="1" value="<%= item.desired_qty %>" style="width:60px" />
+          <input name="supplier" type="text" value="<%= item.supplier || '' %>" placeholder="Supplier" style="width:120px" />
+          <button class="btn secondary" type="submit">Update</button>
         </form>
         <form method="post" action="/admin/registry/<%= registry.id %>/items/<%= item.id %>/delete" onsubmit="return confirm('Remove this item from the registry?');">
           <button class="btn secondary" type="submit">Delete</button>
@@ -113,6 +122,10 @@
     </div>
   <% }) %>
 </div>
+
+<script id="items-data" type="application/json"><%- JSON.stringify(items.map(function(i) {
+  return { name: i.product_name || 'Registry item', sku: i.product_sku || '', supplier: i.supplier || '', desired: i.desired_qty, purchased: i.purchased_qty, still_needed: i.still_needed };
+})) %></script>
 
 <!-- Record Purchase -->
 <div class="card">
@@ -376,6 +389,35 @@
 </details>
 
 <script>
+// Export to Excel
+(function(){
+  var btn = document.getElementById('export-excel-btn');
+  if (!btn) return;
+  var items = JSON.parse(document.getElementById('items-data').textContent);
+  var registryName = <%- JSON.stringify(registry.display_name) %>;
+  btn.addEventListener('click', function() {
+    var rows = [['Item', 'SKU', 'Supplier', 'Desired', 'Purchased', 'Still Needed']];
+    items.forEach(function(item) {
+      rows.push([item.name, item.sku, item.supplier, item.desired, item.purchased, item.still_needed]);
+    });
+    var csv = rows.map(function(row) {
+      return row.map(function(val) {
+        var s = String(val == null ? '' : val).replace(/"/g, '""');
+        return /[,"\n]/.test(s) ? '"' + s + '"' : s;
+      }).join(',');
+    }).join('\r\n');
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = registryName.replace(/[^a-z0-9]/gi, '-').toLowerCase() + '-registry.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+})();
+
 // Copy link buttons
 document.querySelectorAll('.copy-link-btn').forEach(btn => {
   btn.addEventListener('click', () => {

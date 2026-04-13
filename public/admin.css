@@ -45,6 +45,15 @@ h2 {
 }
 
 /* ── Cards ──────────────────────────────── */
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.card-header h2 { margin-bottom: 0; }
+
 .card {
   background: var(--white);
   border: 1px solid var(--border);

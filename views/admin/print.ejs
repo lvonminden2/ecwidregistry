@@ -16,7 +16,7 @@
     }
 
     .print-header {
-      margin-bottom: 20px;
+      margin-bottom: 16px;
       padding-bottom: 12px;
       border-bottom: 2px solid #000;
     }
@@ -32,6 +32,7 @@
       color: #555;
     }
 
+    /* ── Screen-only actions bar ── */
     .print-actions {
       margin-top: 14px;
       display: flex;
@@ -54,6 +55,60 @@
       color: #000;
     }
 
+    /* ── Options panel ── */
+    .options-panel {
+      margin: 16px 0;
+      padding: 14px 16px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      background: #fafafa;
+    }
+
+    .options-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      align-items: flex-start;
+    }
+
+    .options-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .options-label {
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      margin-bottom: 2px;
+    }
+
+    .options-checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+    }
+
+    .options-checks label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .options-select {
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      padding: 4px 8px;
+    }
+
+    /* ── Table ── */
     table {
       width: 100%;
       border-collapse: collapse;
@@ -70,7 +125,6 @@
       border-top: 1px solid #000;
       border-bottom: 1px solid #000;
       white-space: nowrap;
-      background: #fff;
     }
 
     tbody td {
@@ -82,8 +136,6 @@
     tbody tr:last-child td { border-bottom: 1px solid #000; }
 
     .item-name { font-weight: bold; }
-    .item-sku  { font-size: 11px; color: #555; margin-top: 2px; }
-
     .num { text-align: center; }
 
     .print-footer {
@@ -95,7 +147,8 @@
     }
 
     @media print {
-      .print-actions { display: none !important; }
+      .print-actions,
+      .options-panel { display: none !important; }
       body { padding: 0; }
       @page { margin: 18mm 16mm; }
       thead th { border-top: 2px solid #000; border-bottom: 2px solid #000; }
@@ -114,81 +167,135 @@
   </div>
   <div class="print-actions">
     <button class="print-btn" onclick="window.print()">Print / Save PDF</button>
-    <button class="print-btn secondary" onclick="exportCSV()">Export to Excel</button>
     <button class="print-btn secondary" onclick="window.close()">Close</button>
   </div>
 </div>
 
-<table>
-  <thead>
-    <tr>
-      <th style="width:45%">Item</th>
-      <th>SKU</th>
-      <th class="num">Desired</th>
-      <th class="num">Purchased</th>
-      <th class="num">Still Needed</th>
-    </tr>
-  </thead>
-  <tbody>
-    <% if (items.length === 0) { %>
-      <tr>
-        <td colspan="5" style="color:#555;padding:20px 10px">No items on this registry yet.</td>
-      </tr>
-    <% } %>
-    <% items.forEach(item => { %>
-      <tr>
-        <td>
-          <div class="item-name"><%= item.product_name || 'Registry item' %></div>
-        </td>
-        <td><% if (item.product_sku) { %><span class="item-sku"><%= item.product_sku %></span><% } %></td>
-        <td class="num"><%= item.desired_qty %></td>
-        <td class="num"><%= item.purchased_qty %></td>
-        <td class="num"><%= item.still_needed %></td>
-      </tr>
-    <% }) %>
-  </tbody>
-</table>
-
-<div class="print-footer">
-  <span>Printed <%= new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) %></span>
-  <span><%= items.length %> item<%= items.length !== 1 ? 's' : '' %> &nbsp;&middot;&nbsp; <%= items.reduce((s,i) => s + i.still_needed, 0) %> still needed</span>
+<!-- Options panel (hidden when printing) -->
+<div class="options-panel">
+  <div class="options-row">
+    <div class="options-group">
+      <div class="options-label">Columns</div>
+      <div class="options-checks">
+        <label><input type="checkbox" id="col-sku" checked /> SKU</label>
+        <label><input type="checkbox" id="col-supplier" checked /> Supplier</label>
+        <label><input type="checkbox" id="col-desired" checked /> Desired</label>
+        <label><input type="checkbox" id="col-purchased" checked /> Purchased</label>
+        <label><input type="checkbox" id="col-needed" checked /> Still Needed</label>
+      </div>
+    </div>
+    <div class="options-group">
+      <div class="options-label">Sort by</div>
+      <select id="sort-select" class="options-select">
+        <option value="default">Order added</option>
+        <option value="name">Name A–Z</option>
+        <option value="sku">SKU</option>
+        <option value="supplier">Supplier</option>
+        <option value="needed-desc">Still needed (most first)</option>
+        <option value="desired-desc">Desired qty (most first)</option>
+      </select>
+    </div>
+  </div>
 </div>
 
+<table id="items-table">
+  <thead>
+    <tr>
+      <th id="th-name">Item</th>
+      <th id="th-sku">SKU</th>
+      <th id="th-supplier">Supplier</th>
+      <th id="th-desired" class="num">Desired</th>
+      <th id="th-purchased" class="num">Purchased</th>
+      <th id="th-needed" class="num">Still Needed</th>
+    </tr>
+  </thead>
+  <tbody id="items-tbody"></tbody>
+</table>
+
+<div class="print-footer" id="print-footer"></div>
+
 <script>
-var ITEMS = <%- JSON.stringify(items.map(function(i) {
+var RAW_ITEMS = <%- JSON.stringify(items.map(function(i) {
   return {
     name: i.product_name || 'Registry item',
     sku: i.product_sku || '',
+    supplier: i.supplier || '',
     desired: i.desired_qty,
     purchased: i.purchased_qty,
     still_needed: i.still_needed
   };
 })) %>;
 
-var REGISTRY_NAME = <%- JSON.stringify(registry.display_name) %>;
+var COLS = {
+  sku:       { el: null, th: 'th-sku',       index: 1 },
+  supplier:  { el: null, th: 'th-supplier',  index: 2 },
+  desired:   { el: null, th: 'th-desired',   index: 3 },
+  purchased: { el: null, th: 'th-purchased', index: 4 },
+  needed:    { el: null, th: 'th-needed',    index: 5 }
+};
 
-function exportCSV() {
-  var rows = [['Item', 'SKU', 'Desired', 'Purchased', 'Still Needed']];
-  ITEMS.forEach(function(item) {
-    rows.push([item.name, item.sku, item.desired, item.purchased, item.still_needed]);
-  });
-  var csv = rows.map(function(row) {
-    return row.map(function(val) {
-      var s = String(val).replace(/"/g, '""');
-      return /[,"\n]/.test(s) ? '"' + s + '"' : s;
-    }).join(',');
-  }).join('\r\n');
-
-  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = REGISTRY_NAME.replace(/[^a-z0-9]/gi, '-').toLowerCase() + '-registry.csv';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+function getItems() {
+  var sort = document.getElementById('sort-select').value;
+  var items = RAW_ITEMS.slice();
+  if (sort === 'name')         items.sort(function(a,b){ return a.name.localeCompare(b.name); });
+  else if (sort === 'sku')     items.sort(function(a,b){ return a.sku.localeCompare(b.sku); });
+  else if (sort === 'supplier')items.sort(function(a,b){ return a.supplier.localeCompare(b.supplier); });
+  else if (sort === 'needed-desc')  items.sort(function(a,b){ return b.still_needed - a.still_needed; });
+  else if (sort === 'desired-desc') items.sort(function(a,b){ return b.desired - a.desired; });
+  return items;
 }
+
+function isColOn(key) {
+  return document.getElementById('col-' + key).checked;
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function render() {
+  var items = getItems();
+  var showSku      = isColOn('sku');
+  var showSupplier = isColOn('supplier');
+  var showDesired  = isColOn('desired');
+  var showPurchased= isColOn('purchased');
+  var showNeeded   = isColOn('needed');
+
+  // Header columns
+  document.getElementById('th-sku').style.display       = showSku       ? '' : 'none';
+  document.getElementById('th-supplier').style.display  = showSupplier  ? '' : 'none';
+  document.getElementById('th-desired').style.display   = showDesired   ? '' : 'none';
+  document.getElementById('th-purchased').style.display = showPurchased ? '' : 'none';
+  document.getElementById('th-needed').style.display    = showNeeded    ? '' : 'none';
+
+  var rows = items.length === 0
+    ? '<tr><td colspan="6" style="color:#555;padding:20px 10px">No items on this registry yet.</td></tr>'
+    : items.map(function(item) {
+        return '<tr>' +
+          '<td class="item-name">' + esc(item.name) + '</td>' +
+          (showSku       ? '<td>' + esc(item.sku) + '</td>' : '') +
+          (showSupplier  ? '<td>' + esc(item.supplier) + '</td>' : '') +
+          (showDesired   ? '<td class="num">' + item.desired + '</td>' : '') +
+          (showPurchased ? '<td class="num">' + item.purchased + '</td>' : '') +
+          (showNeeded    ? '<td class="num">' + item.still_needed + '</td>' : '') +
+          '</tr>';
+      }).join('');
+
+  document.getElementById('items-tbody').innerHTML = rows;
+
+  var totalNeeded = items.reduce(function(s, i) { return s + i.still_needed; }, 0);
+  document.getElementById('print-footer').innerHTML =
+    '<span>Printed ' + new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) + '</span>' +
+    '<span>' + items.length + ' item' + (items.length !== 1 ? 's' : '') + ' &nbsp;&middot;&nbsp; ' + totalNeeded + ' still needed</span>';
+}
+
+// Wire up controls
+['col-sku','col-supplier','col-desired','col-purchased','col-needed'].forEach(function(id) {
+  document.getElementById(id).addEventListener('change', render);
+});
+document.getElementById('sort-select').addEventListener('change', render);
+
+render();
 </script>
 
 </body>

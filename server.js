@@ -169,6 +169,9 @@ const init = db.transaction(() => {
   if (!itemCols.includes("product_thumbnail")) {
     db.exec("ALTER TABLE registry_item ADD COLUMN product_thumbnail TEXT");
   }
+  if (!itemCols.includes("supplier")) {
+    db.exec("ALTER TABLE registry_item ADD COLUMN supplier TEXT");
+  }
   const purchaseCols = db.prepare("PRAGMA table_info(registry_purchase)").all().map((c) => c.name);
   if (!purchaseCols.includes("product_name")) {
     db.exec("ALTER TABLE registry_purchase ADD COLUMN product_name TEXT");
@@ -968,8 +971,9 @@ app.post("/admin/registry/:id/items/:itemId/quantity", (req, res) => {
     const msg = encodeURIComponent("Desired quantity must be at least 1.");
     return res.redirect(`/admin/registry/${registryId}?error=${msg}`);
   }
-  db.prepare("UPDATE registry_item SET desired_qty = ? WHERE id = ?").run(desiredQty, itemId);
-  const msg = encodeURIComponent("Quantity updated.");
+  const supplier = String(req.body.supplier || "").trim() || null;
+  db.prepare("UPDATE registry_item SET desired_qty = ?, supplier = ? WHERE id = ?").run(desiredQty, supplier, itemId);
+  const msg = encodeURIComponent("Item updated.");
   return res.redirect(`/admin/registry/${registryId}?info=${msg}`);
 });
 
